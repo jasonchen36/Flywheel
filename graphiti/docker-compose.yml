@@ -1,0 +1,17 @@
+# Empty Neo4j for Graphiti — NEW volume name so you never reuse employer data.
+# Usage: docker compose -f graphiti/docker-compose.yml up -d
+services:
+  neo4j:
+    image: neo4j:5.26.2
+    container_name: graphiti-neo4j-personal
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme-graphiti}
+    volumes:
+      - graphiti_neo4j_personal_data:/data
+    restart: unless-stopped
+
+volumes:
+  graphiti_neo4j_personal_data:

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Install: copy to ~/Library/LaunchAgents/com.graphiti.memory.plist
+  Edit PYTHON and MAIN paths after bootstrap.sh.
+  Load: launchctl load ~/Library/LaunchAgents/com.graphiti.memory.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.graphiti.memory</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPLACE_WITH_VENV_PYTHON</string>
+        <string>REPLACE_WITH_GRAPHITI_CLONE/mcp_server/main.py</string>
+        <string>--llm-provider</string>
+        <string>gemini</string>
+        <string>--database-provider</string>
+        <string>neo4j</string>
+        <string>--model</string>
+        <string>gemini-2.5-flash</string>
+        <string>--embedder-provider</string>
+        <string>gemini</string>
+        <string>--embedder-model</string>
+        <string>text-embedding-004</string>
+        <string>--temperature</string>
+        <string>0.0</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CONFIG_PATH</key>
+        <string>REPLACE_WITH_GRAPHITI_CLONE/mcp_server/config/config.yaml</string>
+        <key>GRAPHITI_TELEMETRY_ENABLED</key>
+        <string>false</string>
+        <key>NEO4J_URI</key>
+        <string>bolt://localhost:7687</string>
+        <key>NEO4J_USER</key>
+        <string>neo4j</string>
+        <key>NEO4J_PASSWORD</key>
+        <string>changeme-graphiti</string>
+        <key>GOOGLE_API_KEY</key>
+        <string>REPLACE_ME</string>
+        <key>GOOGLE_USE_VERTEX</key>
+        <string>false</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/graphiti-memory.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/graphiti-memory.log</string>
+</dict>
+</plist>

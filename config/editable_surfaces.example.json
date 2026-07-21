@@ -1,0 +1,107 @@
+{
+  "_doc": "Lil'Log Self-Harness / Meta-Harness: permission + editable surface LIVE OUTSIDE the mutation loop. Anything not listed here is forbidden for auto-edits.",
+  "_ref": "https://lilianweng.github.io/posts/2026-07-04-harness/",
+  "version": 1,
+  "allow": [
+    {
+      "id": "lesson_autogen",
+      "glob": "~/.claude/MEMORY/lessons/lesson_autogen_*.md",
+      "who": ["self_improve.py", "lesson_evolve.py", "lesson_dedup.py"],
+      "bounds": "single lesson file; backup before rewrite"
+    },
+    {
+      "id": "skill_guardrails",
+      "glob": "~/.claude/commands/*.md",
+      "who": ["skill_autofix.py"],
+      "bounds": "only between AUTO-LEARNED-GUARDRAILS markers; real files only (no symlinks/plugins)"
+    },
+    {
+      "id": "pi_skill_guardrails",
+      "glob": "~/.pi/agent/skills/**/SKILL.md",
+      "who": ["skill_autofix.py"],
+      "bounds": "only between AUTO-LEARNED-GUARDRAILS markers; real files under ~/.pi/agent/skills only"
+    },
+    {
+      "id": "pi_skill_flat_guardrails",
+      "glob": "~/.pi/agent/skills/*.md",
+      "who": ["skill_autofix.py"],
+      "bounds": "only between AUTO-LEARNED-GUARDRAILS markers; real files under ~/.pi/agent/skills only"
+    },
+    {
+      "id": "pi_turn_state",
+      "path": "~/.claude/MEMORY/STATE/pi_turn_state.json",
+      "who": ["pai-learning-harness.ts", "pai-enforcement-gate.ts"],
+      "bounds": "per-turn tool/skill state for pi EnforcementGate"
+    },
+    {
+      "id": "pattern_taxonomy",
+      "path": "~/.claude/MEMORY/LEARNING/self_improve.py",
+      "who": ["pattern_promotion.py", "review_queue.py"],
+      "bounds": "append-only to PATTERN_KEYWORDS block"
+    },
+    {
+      "id": "enforcement_config",
+      "path": "~/.claude/MEMORY/STATE/enforcement_config.json",
+      "who": ["enforcement_promotion.py", "review_queue.py"],
+      "bounds": "overrides[pattern] mode only"
+    },
+    {
+      "id": "ace_playbook",
+      "path": "~/.claude/MEMORY/STATE/ace_playbook.json",
+      "who": ["ace_playbook.py", "ace_reflector.py"],
+      "bounds": "itemized bullets only; never full prompt blob rewrite"
+    },
+    {
+      "id": "signals_ledgers",
+      "glob": "~/.claude/MEMORY/LEARNING/SIGNALS/*",
+      "who": ["*"],
+      "bounds": "append-only jsonl / structured state"
+    },
+    {
+      "id": "diagnostics",
+      "glob": "~/.claude/MEMORY/LEARNING/DIAGNOSTICS/*",
+      "who": ["*"],
+      "bounds": "report-only"
+    },
+    {
+      "id": "negative_results",
+      "path": "~/.claude/MEMORY/LEARNING/SIGNALS/negative_results.jsonl",
+      "who": ["self_harness.py", "skill_autofix.py", "lesson_evolve.py"],
+      "bounds": "append-only failure archive (Lil'Log: preserve negative results)"
+    },
+    {
+      "id": "held_out_suite_state",
+      "glob": "~/.claude/MEMORY/STATE/held_out_suite_*.json",
+      "who": ["held_out_suite.py"],
+      "bounds": "baseline + last run metrics only"
+    },
+    {
+      "id": "held_out_fixtures",
+      "glob": "~/.claude/MEMORY/LEARNING/held_out_suite/fixtures/*.json",
+      "who": ["human"],
+      "bounds": "human-authored only — never auto-edit fixtures (prevents reward hacking)"
+    },
+    {
+      "id": "agent_rollouts_state",
+      "glob": "~/.claude/MEMORY/STATE/agent_rollouts_*.json",
+      "who": ["agent_rollouts.py"],
+      "bounds": "baseline + last run only"
+    }
+  ],
+  "deny": [
+    "~/.claude/hooks/**",
+    "~/.claude/settings.json",
+    "~/.claude/MEMORY/LEARNING/review_queue.py",
+    "~/.claude/MEMORY/LEARNING/editable_surfaces.json",
+    "~/.claude/MEMORY/LEARNING/self_harness.py",
+    "~/.claude/CLAUDE.md",
+    "~/CLAUDE.md",
+    "~/Agents.md",
+    "~/.pi/agent/extensions/**",
+    "~/.pi/agent/settings.json",
+    "~/.pi/settings.json",
+    "**/warehouse-*/**",
+    "**/dataform-*/**",
+    "**/.git/**"
+  ]
+}

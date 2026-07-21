@@ -1,0 +1,59 @@
+# Blast-radius + security patterns for SecurityValidator.hook.ts
+# Customize project IDs and tools for your employer.
+version: "1.0.0"
+philosophy:
+  mode: defensive
+  principle: Block irreversible destruction; confirm high-blast writes
+
+bash:
+  trusted: []
+  blocked:
+    - pattern: 'rm\s+-rf\s+/'
+      reason: 'Catastrophic filesystem wipe of root'
+    - pattern: 'rm\s+-rf\s+~'
+      reason: 'Catastrophic wipe of home directory'
+    - pattern: 'security\s+dump-keychain'
+      reason: 'Never dump macOS keychain'
+    - pattern: 'git\s+push\s+.*--force'
+      reason: 'Force-push blocked by policy'
+    - pattern: 'git\s+push\s+.*\s+-f\b'
+      reason: 'Force-push blocked by policy'
+    - pattern: 'gh\s+repo\s+delete\b'
+      reason: 'Repo delete blocked'
+  confirm:
+    - pattern: 'bq\s+rm\b'
+      reason: 'Destructive BigQuery remove'
+    - pattern: 'bq\s+load\b'
+      reason: 'bq load writes data'
+    - pattern: 'bq\s+update\b'
+      reason: 'bq update mutates metadata/schema'
+    - pattern: 'gcloud\s+.*--project[=\s]+\S*prd'
+      reason: 'gcloud targeting a production project'
+    - pattern: 'kubectl\s+(apply|delete|scale|rollout|exec|drain)\b'
+      reason: 'kubectl mutating cluster state'
+    - pattern: 'helm\s+(install|upgrade|uninstall|rollback)\b'
+      reason: 'helm release change'
+    - pattern: 'gh\s+pr\s+(review|comment|create|merge|edit)\b'
+      reason: 'GitHub PR mutation (confirm before post)'
+    - pattern: 'gh\s+issue\s+(comment|create|edit|close)\b'
+      reason: 'GitHub issue mutation'
+    - pattern: 'git\s+push\b'
+      reason: 'git push to remote'
+    - pattern: 'terraform\s+apply\b'
+      reason: 'terraform apply'
+  alert:
+    - pattern: 'sudo\b'
+      reason: 'Elevated privileges'
+
+paths:
+  zeroAccess:
+    - '~/.ssh'
+    - '~/.gnupg'
+    - '~/Library/Keychains'
+  readOnly: []
+  confirmWrite:
+    - '~/.claude/settings.json'
+    - '~/.claude/hooks'
+  noDelete:
+    - '~/.claude/MEMORY'
+projects: {}

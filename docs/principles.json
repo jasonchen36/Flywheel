@@ -1,0 +1,1566 @@
+{
+  "generated": "2026-07-12",
+  "count": 195,
+  "principles": [
+    {
+      "id": "P001",
+      "source_error": 1,
+      "category": "Investigation, Dataflow, Autoscaling",
+      "title": "Hallucinating Dataflow Autoscaling Issues",
+      "what": "**Date:** 2026-01-29 **Context:** Investigating bizops streaming-pipeline high latency in us-central1 **Category:** Investigation, Dataflow, Autoscaling",
+      "principle": "**Date:** 2026-01-29 **Context:** Investigating bizops streaming-pipeline high latency in us-central1 **Category:** Investigation, Dataflow, Autoscaling"
+    },
+    {
+      "id": "P005",
+      "source_error": 5,
+      "category": "Git Workflow",
+      "title": "Validation Artifacts Committed to Production Repo",
+      "what": "**What happened**: Validation artifacts were committed to the production repo instead of PR comments. Treated evidence as production code.",
+      "principle": "**What happened**: Validation artifacts were committed to the production repo instead of PR comments. Treated evidence as production code."
+    },
+    {
+      "id": "P006",
+      "source_error": 6,
+      "category": "SQL, BigQuery",
+      "title": "BigQuery BEGIN TRANSACTION Nesting Confusion",
+      "what": "**What happened**: Misunderstood that `BEGIN TRANSACTION` cannot be nested inside `BEGIN` in BigQuery. BigQuery actually allows an outer `BEGIN...EXCEPTION...END` block combined with an inner `BEGIN TRANSACTION...COMMIT TRANSACTION` block for atomicity.",
+      "principle": "**What happened**: Misunderstood that `BEGIN TRANSACTION` cannot be nested inside `BEGIN` in BigQuery. BigQuery actually allows an outer `BEGIN...EXCEPTION...END` block combined with an inner `BEGIN TRANSACTION...COMMIT TRANSACTION` block for atomicity."
+    },
+    {
+      "id": "P008",
+      "source_error": 8,
+      "category": "SQL, Schema, Gold Layer",
+      "title": "Flat Schema Assumption on Nested RECORD Gold Event Log",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Schema, Gold Layer",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Schema, Gold Layer"
+    },
+    {
+      "id": "P009",
+      "source_error": 9,
+      "category": "SQL, Data Quality, SCD2",
+      "title": "Missing SELECT DISTINCT in SCD2 CTE Causing Fan-Out",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Data Quality, SCD2",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Data Quality, SCD2"
+    },
+    {
+      "id": "P010",
+      "source_error": 10,
+      "category": "SQL Semantics, SCD2",
+      "title": "SCD2 Boundary Changed from <= to <",
+      "what": "**Date:** 2026-02-05 **Category:** SQL Semantics, SCD2",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL Semantics, SCD2"
+    },
+    {
+      "id": "P011",
+      "source_error": 11,
+      "category": "Deployment, data-infra-repo",
+      "title": "Multi-Env Changes in Single PR Violating Environment-per-PR Pattern",
+      "what": "**Date:** 2026-02-05 **Category:** Deployment, data-infra-repo",
+      "principle": "**Date:** 2026-02-05 **Category:** Deployment, data-infra-repo"
+    },
+    {
+      "id": "P012",
+      "source_error": 12,
+      "category": "SQL, Code Quality, DRY Principle",
+      "title": "Duplicated 8-Line SCD2 Temporal Join Logic Across 5 CTEs",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Code Quality, DRY Principle",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Code Quality, DRY Principle"
+    },
+    {
+      "id": "P013",
+      "source_error": 13,
+      "category": "SQL, Performance, BigQuery",
+      "title": "Missing Partition/Cluster Filter on Event Log Table Join",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Performance, BigQuery",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Performance, BigQuery"
+    },
+    {
+      "id": "P014",
+      "source_error": 14,
+      "category": "Deployment Workflow",
+      "title": "Created prd-promotion Branch and PRd Directly to PRD",
+      "what": "**Date:** 2026-02-05 **Category:** Deployment Workflow",
+      "principle": "**Date:** 2026-02-05 **Category:** Deployment Workflow"
+    },
+    {
+      "id": "P015",
+      "source_error": 15,
+      "category": "Deployment Workflow, Git",
+      "title": "Bug Fix PR Targeting UAT Branch Directly Instead of Master",
+      "what": "**Date:** 2026-02-05 **Category:** Deployment Workflow, Git",
+      "principle": "**Date:** 2026-02-05 **Category:** Deployment Workflow, Git"
+    },
+    {
+      "id": "P017",
+      "source_error": 17,
+      "category": "SQL, Boolean Logic",
+      "title": "`flag = FALSE` on BOOLEAN Column Excluding NULLs",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Boolean Logic",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Boolean Logic"
+    },
+    {
+      "id": "P018",
+      "source_error": 18,
+      "category": "DAG Template, Domain Configuration",
+      "title": "Wrong Domain \u2014 Reporting Domain Used, MV in communications_gold",
+      "what": "**Date:** 2026-02-06 **Category:** DAG Template, Domain Configuration",
+      "principle": "**Date:** 2026-02-06 **Category:** DAG Template, Domain Configuration"
+    },
+    {
+      "id": "P019",
+      "source_error": 19,
+      "category": "SQL",
+      "title": "Column Missing from Subquery SELECT List",
+      "what": "**What happened**: A column referenced in an outer `WHERE` clause was missing from the subquery's `SELECT` list, resulting in a \"column not found\" error.",
+      "principle": "**What happened**: A column referenced in an outer `WHERE` clause was missing from the subquery's `SELECT` list, resulting in a \"column not found\" error."
+    },
+    {
+      "id": "P020",
+      "source_error": 20,
+      "category": "Documentation, Code Quality",
+      "title": "Stale Documentation After TRUNCATE+INSERT \u2192 CTAS Switch",
+      "what": "**Date:** 2026-02-05 **Category:** Documentation, Code Quality",
+      "principle": "**Date:** 2026-02-05 **Category:** Documentation, Code Quality"
+    },
+    {
+      "id": "P021",
+      "source_error": 21,
+      "category": "SQL, Gold Layer Conventions",
+      "title": "Mixed `is_deleted=0` and `_warehouse_metadata.delete_flag=false`",
+      "what": "**Date:** 2026-02-05 **Category:** SQL, Gold Layer Conventions",
+      "principle": "**Date:** 2026-02-05 **Category:** SQL, Gold Layer Conventions"
+    },
+    {
+      "id": "P022",
+      "source_error": 22,
+      "category": "Gold Layer Pattern, SQL",
+      "title": "Success Metrics Inside BEGIN...END Instead of After END",
+      "what": "**Date:** 2026-02-06 **Category:** Gold Layer Pattern, SQL",
+      "principle": "**Date:** 2026-02-06 **Category:** Gold Layer Pattern, SQL"
+    },
+    {
+      "id": "P023",
+      "source_error": 23,
+      "category": "SQL, Boolean Logic",
+      "title": "Numeric Comparisons on BOOLEAN Columns",
+      "what": "**Date:** 2026-02-06 **Category:** SQL, Boolean Logic",
+      "principle": "**Date:** 2026-02-06 **Category:** SQL, Boolean Logic"
+    },
+    {
+      "id": "P024",
+      "source_error": 24,
+      "category": "SQL Query, Local Testing, Data Pipeline",
+      "title": "Missing Required Column in MERGE Statement (2026-02-09)",
+      "what": "**Category:** SQL Query, Local Testing, Data Pipeline",
+      "principle": "**Category:** SQL Query, Local Testing, Data Pipeline"
+    },
+    {
+      "id": "P025",
+      "source_error": 25,
+      "category": "PR Review, Workflow",
+      "title": "Not Using review-platform MCP for PR Reviews (2026-02-09)",
+      "what": "**Situation:** Reviewing multiple PRs (#5141, #484, #5127, #5143, etc.)",
+      "principle": "**Situation:** Reviewing multiple PRs (#5141, #484, #5127, #5143, etc.)"
+    },
+    {
+      "id": "P027",
+      "source_error": 27,
+      "category": "PR Review, Workflow",
+      "title": "Approving PR Before review-platform Review Completed (2026-02-09)",
+      "what": "**Error:** Approved the PR immediately while review-platform review was still running in background. The review took 3.5 minutes to complete and returned after I had already approved.",
+      "principle": "**Error:** Approved the PR immediately while review-platform review was still running in background. The review took 3.5 minutes to complete and returned after I had already approved."
+    },
+    {
+      "id": "P028",
+      "source_error": 28,
+      "category": "PR Review, SQL Validation",
+      "title": "PR Review - Claiming SQL Failure Without Validation",
+      "what": "**Date:** 2026-02-10 **Context:** Reviewing PR #5121 (data-infra-repo) - MV changes for likes/comments count **Category:** PR Review, SQL Validation",
+      "principle": "**Date:** 2026-02-10 **Context:** Reviewing PR #5121 (data-infra-repo) - MV changes for likes/comments count **Category:** PR Review, SQL Validation"
+    },
+    {
+      "id": "P029",
+      "source_error": 29,
+      "category": "PR Review, Communication",
+      "title": "PR Review - Posting Verification Comments When Everything Is Fine",
+      "what": "**Date:** 2026-02-10 **Context:** Reviewing PR #5158 (data-infra-repo) - Bizops GL partitioning **Category:** PR Review, Communication",
+      "principle": "**Date:** 2026-02-10 **Context:** Reviewing PR #5158 (data-infra-repo) - Bizops GL partitioning **Category:** PR Review, Communication"
+    },
+    {
+      "id": "P030",
+      "source_error": 30,
+      "category": "PR Review / Data Pipeline",
+      "title": "PR Review - Claiming Schema Design Issue Without bq CLI Verification",
+      "what": "",
+      "principle": "- Always use bq query dry_run to test schema patterns before claiming issues - Test BOTH approaches to understand tradeoffs - Consider use case context (config vs data, manual vs generated) - Only claim schema issues if verification shows actual problems"
+    },
+    {
+      "id": "P032",
+      "source_error": 32,
+      "category": "Workflow / Authorization",
+      "title": "Deleted BigQuery Table Without Approval (2026-02-10)",
+      "what": "PR #5169 (Tommy's `fact_nominee_scd2_status` view) triggered a CI/CD failure. The error was on a DIFFERENT table: `announcement_view_rate_external_table`. The Terraform apply failed with:",
+      "principle": "PR #5169 (Tommy's `fact_nominee_scd2_status` view) triggered a CI/CD failure. The error was on a DIFFERENT table: `announcement_view_rate_external_table`. The Terraform apply failed with:"
+    },
+    {
+      "id": "P033",
+      "source_error": 33,
+      "category": "PR Review / Verification Workflow",
+      "title": "PR Review - Verified Behavior But Forgot SQL Syntax Validation (2026-02-10)",
+      "what": "**Context:** Reviewing PRs #485 (airflow-operators-repo) and #259 (internal-lib-dw-utility)",
+      "principle": "**Context:** Reviewing PRs #485 (airflow-operators-repo) and #259 (internal-lib-dw-utility)"
+    },
+    {
+      "id": "P034",
+      "source_error": 34,
+      "category": "Data Pipeline / Validation Logic",
+      "title": "NULL Handling Bug in Validation Logic Causing Silent First-Run Failures (2026-02-10)",
+      "what": "Discovered a critical bug in `GoldLayerToDatalakeConfig.get_data_interval_start_and_end_timestamp()` that affects all 59 many-to-one gold-layer-to-datalake DAGs when running for the first time (empty metrics tables).",
+      "principle": "Discovered a critical bug in `GoldLayerToDatalakeConfig.get_data_interval_start_and_end_timestamp()` that affects all 59 many-to-one gold-layer-to-datalake DAGs when running for the first time (empty metrics tables)."
+    },
+    {
+      "id": "P035",
+      "source_error": 35,
+      "category": "Deployment / Data Pipeline Validation",
+      "title": "Scrum-Derived Validation Gaps Before Production Promotion (2026-02-12)",
+      "what": "During scrum follow-up for active data-platform work, two production-facing issues were highlighted that were not detected during earlier validation:",
+      "principle": "During scrum follow-up for active data-platform work, two production-facing issues were highlighted that were not detected during earlier validation:"
+    },
+    {
+      "id": "P036",
+      "source_error": 36,
+      "category": "PR Review / Schema Verification",
+      "title": "PR Review - Claimed Bronze Native `client_pk` Risk Without Verifying Schema (2026-02-17)",
+      "what": "During PR review for `airflow-operators-repo` PR #489, I posted a blocking P1 comment claiming that central Bronze Native tables might not have `client_pk`, which could make the single-count query path invalid or undercount.",
+      "principle": "During PR review for `airflow-operators-repo` PR #489, I posted a blocking P1 comment claiming that central Bronze Native tables might not have `client_pk`, which could make the single-count query path invalid or undercount."
+    },
+    {
+      "id": "P037",
+      "source_error": 37,
+      "category": "transform-layer / Validation Coverage",
+      "title": "Validated Main Operations But Missed Changed Assertion SQLX Target (2026-02-18)",
+      "what": "In `transform-repo` PR #188, the core operation targets were validated and succeeded in DEV, but a changed assertion target was not executed as part of validation. The assertion file used `latest_silver.is_deleted IS TRUE` while `is_deleted` in Silver is `INT64`, which caused runtime failure when the assertion target was invoked later.",
+      "principle": "In `transform-repo` PR #188, the core operation targets were validated and succeeded in DEV, but a changed assertion target was not executed as part of validation. The assertion file used `latest_silver.is_deleted IS TRUE` while `is_deleted` in Silver is `INT64`, which caused runtime failure when the assertion target was invoked later."
+    },
+    {
+      "id": "P038",
+      "source_error": 38,
+      "category": "PR Review / Workflow Compliance",
+      "title": "Skipping review-platform Review Because of Time Pressure (2026-02-13)",
+      "what": "A PR review request explicitly asked to skip review-platform due to time pressure, and review proceeded manually.",
+      "principle": "A PR review request explicitly asked to skip review-platform due to time pressure, and review proceeded manually."
+    },
+    {
+      "id": "P039",
+      "source_error": 39,
+      "category": "Service Operations / Incident Triage",
+      "title": "Treating LaunchAgent Bootstrap Failure as Service Outage Without Data-Plane Check (2026-02-17)",
+      "what": "`launchctl bootstrap` reported `Input/output error`, but health endpoint checks still returned `{\"status\":\"ok\"}` for `http://127.0.0.1:8081/health`.",
+      "principle": "`launchctl bootstrap` reported `Input/output error`, but health endpoint checks still returned `{\"status\":\"ok\"}` for `http://127.0.0.1:8081/health`."
+    },
+    {
+      "id": "P040",
+      "source_error": 40,
+      "category": "Tooling / MCP Reliability",
+      "title": "Assuming MCP Servers Are Usable Because They Are Registered (2026-02-16)",
+      "what": "Session flow exposed confusion between MCP servers being \"registered\" and being \"connected/usable.\"",
+      "principle": "Session flow exposed confusion between MCP servers being \"registered\" and being \"connected/usable.\""
+    },
+    {
+      "id": "P041",
+      "source_error": 41,
+      "category": "PR Review / Execution Integrity",
+      "title": "Accepting Interrupted `/review` Runs as If Review Work Was Complete (2026-02-18)",
+      "what": "Multiple sessions returned: \"Review was interrupted. Please re-run /review and wait for it to complete.\"",
+      "principle": "Multiple sessions returned: \"Review was interrupted. Please re-run /review and wait for it to complete.\""
+    },
+    {
+      "id": "P042",
+      "source_error": 42,
+      "category": "Review Quality / Claim Verification",
+      "title": "Capping Findings Before Claim Verification (2026-02-14)",
+      "what": "There was pressure to limit the number of findings passed into claim verification (e.g., \"maximum findings is 3\"), while unresolved concern remained that all findings should be verified.",
+      "principle": "There was pressure to limit the number of findings passed into claim verification (e.g., \"maximum findings is 3\"), while unresolved concern remained that all findings should be verified."
+    },
+    {
+      "id": "P043",
+      "source_error": 43,
+      "category": "Workflow / Environment Readiness",
+      "title": "Starting Complex Work from Home Directory Without Repo Preflight (2026-02-18)",
+      "what": "Session analyses show the dominant historical error pattern came from working in `~` instead of a target repository with full context.",
+      "principle": "Session analyses show the dominant historical error pattern came from working in `~` instead of a target repository with full context."
+    },
+    {
+      "id": "P044",
+      "source_error": 44,
+      "category": "Workflow",
+      "title": "Created PR for Already-Fixed Bug (2026-02-10)",
+      "what": "**Context:** PR #853 (announcement_view_rate DAG) was merged",
+      "principle": "**Context:** PR #853 (announcement_view_rate DAG) was merged"
+    },
+    {
+      "id": "P045",
+      "source_error": 45,
+      "category": "Investigation / Root Cause Analysis",
+      "title": "Misidentified Root Cause as Infrastructure Instead of Code Configuration (2026-02-10)",
+      "what": "**Context:** Testing announcement_view_rate_dag in STG after PR #853 merged",
+      "principle": "**Context:** Testing announcement_view_rate_dag in STG after PR #853 merged"
+    },
+    {
+      "id": "P046",
+      "source_error": 46,
+      "category": "PR Review / Claim Verification",
+      "title": "Posted a Regex Finding Before Verifying the Exact PR SQL Artifact (2026-02-18)",
+      "what": "A blocking review finding was posted on `data-infra-repo` PR #5201 claiming BigQuery regex `\\d` was the cause of cost under-allocation and should be replaced with `[0-9]`.",
+      "principle": "A blocking review finding was posted on `data-infra-repo` PR #5201 claiming BigQuery regex `\\d` was the cause of cost under-allocation and should be replaced with `[0-9]`."
+    },
+    {
+      "id": "P047",
+      "source_error": 47,
+      "category": "PR Review / State Synchronization",
+      "title": "Reviewing Stale PR State After Author Updates (2026-02-19)",
+      "what": "Review conclusions were carried forward from an earlier PR snapshot after author updates (new commits, force-push, or addressed comments). That created a risk of approving or commenting on outdated code state.",
+      "principle": "Review conclusions were carried forward from an earlier PR snapshot after author updates (new commits, force-push, or addressed comments). That created a risk of approving or commenting on outdated code state."
+    },
+    {
+      "id": "P048",
+      "source_error": 48,
+      "category": "Shell Safety / Review Communication",
+      "title": "Shell Backtick Expansion Corrupting `gh` Comment Commands (2026-02-19)",
+      "what": "Markdown content containing backticks was passed through shell quoting in a way that allowed command substitution/escaping side effects, leading to malformed `gh pr comment` body content.",
+      "principle": "Markdown content containing backticks was passed through shell quoting in a way that allowed command substitution/escaping side effects, leading to malformed `gh pr comment` body content."
+    },
+    {
+      "id": "P049",
+      "source_error": 49,
+      "category": "Environment / Python Tooling",
+      "title": "Running Python Validation with Incompatible Interpreter Version (2026-02-19)",
+      "what": "Validation/test execution used a local Python interpreter outside repository constraints (for example 3.12+ when project requires `<3.12`), producing misleading failures and slowing diagnosis.",
+      "principle": "Validation/test execution used a local Python interpreter outside repository constraints (for example 3.12+ when project requires `<3.12`), producing misleading failures and slowing diagnosis."
+    },
+    {
+      "id": "P050",
+      "source_error": 50,
+      "category": "PR Review / Decision Gating",
+      "title": "Asking Approval-Readiness Before Completing Mandatory Review Gates (2026-02-19)",
+      "what": "Approval-readiness was evaluated or implied before all required gates were complete (latest author response review, evidence re-check, and final check status confirmation).",
+      "principle": "Approval-readiness was evaluated or implied before all required gates were complete (latest author response review, evidence re-check, and final check status confirmation)."
+    },
+    {
+      "id": "P051",
+      "source_error": 51,
+      "category": "Data Safety / Multi-Region Verification",
+      "title": "Accepting Regional Data Assumptions Without Metadata Verification (2026-02-19)",
+      "what": "A regional-risk argument (\"non-NA regions have no data/pipeline\") was nearly accepted without hard metadata validation, despite evidence of non-zero rows in non-NA UAT tables.",
+      "principle": "A regional-risk argument (\"non-NA regions have no data/pipeline\") was nearly accepted without hard metadata validation, despite evidence of non-zero rows in non-NA UAT tables."
+    },
+    {
+      "id": "P052",
+      "source_error": 52,
+      "category": "Workflow Reliability / Guardrail Handling",
+      "title": "Skipping Structured Fallback After Local Policy/Hook Blocks a Workflow (2026-02-19)",
+      "what": "When local hooks/policies blocked an operation, workflow handling was inconsistent (retry loops or ad-hoc workarounds) instead of following a clear fallback path with explicit risk/approval handling.",
+      "principle": "When local hooks/policies blocked an operation, workflow handling was inconsistent (retry loops or ad-hoc workarounds) instead of following a clear fallback path with explicit risk/approval handling."
+    },
+    {
+      "id": "P053",
+      "source_error": 53,
+      "category": "Deployment Workflow / transform-layer Promotion",
+      "title": "Treating Merge as Promotion Readiness Without UAT Airflow Validation (2026-02-20)",
+      "what": "A transform-layer change was already merged, but promotion readiness was assumed before a successful UAT Airflow validation run. UAT evidence showed failures and missing dependency tables (`dim_user_reports_to_flat`) even though merge had completed.",
+      "principle": "A transform-layer change was already merged, but promotion readiness was assumed before a successful UAT Airflow validation run. UAT evidence showed failures and missing dependency tables (`dim_user_reports_to_flat`) even though merge had completed."
+    },
+    {
+      "id": "P054",
+      "source_error": 54,
+      "category": "AI Service Operations / Model Rollout",
+      "title": "Enabling Latest Reviewer Model Without Entitlement Verification (2026-02-20)",
+      "what": "`bot review` failed with `litellm.NotFoundError` / Vertex 404 for `publishers/anthropic/models/claude-sonnet-4-6@default`. Latest model track was selected via opt-in label/flag, but runtime entitlement/access was not verified first.",
+      "principle": "`bot review` failed with `litellm.NotFoundError` / Vertex 404 for `publishers/anthropic/models/claude-sonnet-4-6@default`. Latest model track was selected via opt-in label/flag, but runtime entitlement/access was not verified first."
+    },
+    {
+      "id": "P055",
+      "source_error": 55,
+      "category": "Workflow / Cross-Agent Governance",
+      "title": "Cross-Agent Policy Drift from Unsynchronized Instruction Files (2026-02-21)",
+      "what": "Session review across assistants showed policy-clarity prompts in Gemini (`\"you can use claude.md?\"`, `\"you always ask permission?\"`) while core workflow/approval rules were maintained mainly in `AGENTS.md` / `Claude.md`.",
+      "principle": "Session review across assistants showed policy-clarity prompts in Gemini (`\"you can use claude.md?\"`, `\"you always ask permission?\"`) while core workflow/approval rules were maintained mainly in `AGENTS.md` / `Claude.md`."
+    },
+    {
+      "id": "P056",
+      "source_error": 56,
+      "category": "PR Review / Execution Reliability",
+      "title": "Accepting Interrupted Review Attempts Without Full Restart (2026-02-21)",
+      "what": "Codex session analysis found repeated interruption markers: - 29 occurrences of: user-initiated review interrupted, re-initiate `/review` and wait for completion. - 10 occurrences of: previous turn intentionally interrupted and running processes terminated.",
+      "principle": "Codex session analysis found repeated interruption markers: - 29 occurrences of: user-initiated review interrupted, re-initiate `/review` and wait for completion. - 10 occurrences of: previous turn intentionally interrupted and running processes terminated."
+    },
+    {
+      "id": "P057",
+      "source_error": 57,
+      "category": "Environment Reliability / Model Access",
+      "title": "Skipping Model/Entitlement Preflight in Interactive Sessions (2026-02-21)",
+      "what": "Session data showed repeated model-access friction: - 12 Claude history entries with Vertex `API Error: 404` / `NOT_FOUND` model-access failures. - Gemini sessions repeatedly asked for current model checks and used deterministic health probes.",
+      "principle": "Session data showed repeated model-access friction: - 12 Claude history entries with Vertex `API Error: 404` / `NOT_FOUND` model-access failures. - Gemini sessions repeatedly asked for current model checks and used deterministic health probes."
+    },
+    {
+      "id": "P058",
+      "source_error": 58,
+      "category": "Tooling / Shell Session Management",
+      "title": "Polling Non-PTY Shell Sessions with `write_stdin` After Stdin Closed (2026-02-22)",
+      "what": "Codex session analysis for 2026-02-15 through 2026-02-22 found **67 occurrences** of: - `write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open`",
+      "principle": "Codex session analysis for 2026-02-15 through 2026-02-22 found **67 occurrences** of: - `write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open`"
+    },
+    {
+      "id": "P059",
+      "source_error": 59,
+      "category": "Tooling / MCP Diagnostics",
+      "title": "Collapsing Different MCP Failure Modes into a Single \"Server Broken\" Diagnosis (2026-02-22)",
+      "what": "Session analysis for 2026-02-15 through 2026-02-22 showed repeated MCP failures with different root causes: - **90** `Transport closed` failures across multiple MCP tools/endpoints - **3** `resources/list ... Method not found` failures (all `confluence`)",
+      "principle": "Session analysis for 2026-02-15 through 2026-02-22 showed repeated MCP failures with different root causes: - **90** `Transport closed` failures across multiple MCP tools/endpoints - **3** `resources/list ... Method not found` failures (all `confluence`)"
+    },
+    {
+      "id": "P060",
+      "source_error": 60,
+      "category": "AI Service Operations / MCP Timeout Handling",
+      "title": "Treating 60s MCP Tool Deadlines as review-platform Review Outcomes (2026-02-22)",
+      "what": "Session analysis for 2026-02-15 through 2026-02-22 found **27 occurrences** of: - `timed out awaiting tools/call after 60s`",
+      "principle": "Session analysis for 2026-02-15 through 2026-02-22 found **27 occurrences** of: - `timed out awaiting tools/call after 60s`"
+    },
+    {
+      "id": "P061",
+      "source_error": 61,
+      "category": "PR Review / Scope Discipline",
+      "title": "Drifting Out of Review-Only Mode Into Implementation or Post-Merge Execution (2026-02-22)",
+      "what": "PR-focused session analysis (2026-02-15 through 2026-02-21) found repeated self-corrections where review mode drifted: - \"I went beyond review scope and made changes when you asked for review.\" - \"I should have stayed in review mode.\" - \"I executed review-oriented steps when you asked for post-merge execution.\"",
+      "principle": "PR-focused session analysis (2026-02-15 through 2026-02-21) found repeated self-corrections where review mode drifted: - \"I went beyond review scope and made changes when you asked for review.\" - \"I should have stayed in review mode.\" - \"I executed review-oriented steps when you asked for post-merge execution.\""
+    },
+    {
+      "id": "P062",
+      "source_error": 62,
+      "category": "Shell Safety / Review Evidence Collection",
+      "title": "Unquoted `gh api` URLs Triggering zsh Globbing During CODEOWNERS Verification (2026-02-22)",
+      "what": "During PR approval-requirement verification (`CODEOWNERS` + branch rules), two `gh api` commands failed with: - `zsh:1: no matches found: repos/example-org/.../CODEOWNERS?ref=prd`",
+      "principle": "During PR approval-requirement verification (`CODEOWNERS` + branch rules), two `gh api` commands failed with: - `zsh:1: no matches found: repos/example-org/.../CODEOWNERS?ref=prd`"
+    },
+    {
+      "id": "P063",
+      "source_error": 63,
+      "category": "Git Workflow / Version Management",
+      "title": "Version Downgrade When Resolving Merge Conflicts (2026-02-23)",
+      "what": "While resolving merge conflicts in `airflow-operators-repo` PR #491, I used `git checkout --ours setup.py` to take the PR branch's version (`3.15.8`) over master's (`3.15.9`). This was wrong \u2014 master had already merged PR #492 bumping to `3.15.9`, so the PR branch version was now stale and lower than master. The reviewer flagged it as a downgrade.",
+      "principle": "While resolving merge conflicts in `airflow-operators-repo` PR #491, I used `git checkout --ours setup.py` to take the PR branch's version (`3.15.8`) over master's (`3.15.9`). This was wrong \u2014 master had already merged PR #492 bumping to `3.15.9`, so the PR branch version was now stale and lower than master. The reviewer flagged it as a downgrade."
+    },
+    {
+      "id": "P064",
+      "source_error": 64,
+      "category": "Deployment Workflow / Promotion Hygiene",
+      "title": "Opened Promotion PR in Wrong Repo and Wrong Branch Flow (2026-02-25)",
+      "what": "While promoting `TICKET-N` for `dim_user_reports_to_flat`, I created a PR in the wrong repository and used the wrong promotion path first: - Opened PR in `example-org/pipelines-master` (`#68`) instead of the domain repo `example-org/pipelines-members`. - Created a direct branch-to-`prd` PR in members repo (`#278`) instead of ",
+      "principle": "While promoting `TICKET-N` for `dim_user_reports_to_flat`, I created a PR in the wrong repository and used the wrong promotion path first: - Opened PR in `example-org/pipelines-master` (`#68`) instead of the domain repo `example-org/pipelines-members`. - Created a direct branch-to-`prd` PR in members repo (`#278`) instead of "
+    },
+    {
+      "id": "P065",
+      "source_error": 65,
+      "category": "Estimation / Release Path Analysis",
+      "title": "Estimating a Shared Validation Fix Before Tracing the Release Path (2026-02-26)",
+      "what": "During the `dim_user_reports_to_flat` Gold-to-MySQL validation discussion, I initially estimated the proper fix as roughly `1-2 hours`. After tracing the actual ownership and rollout path, it became clear that the reusable fix was not a single local query tweak: - the query logic lives in `airflow-operators-repo` - the package change needs a releas",
+      "principle": "During the `dim_user_reports_to_flat` Gold-to-MySQL validation discussion, I initially estimated the proper fix as roughly `1-2 hours`. After tracing the actual ownership and rollout path, it became clear that the reusable fix was not a single local query tweak: - the query logic lives in `airflow-operators-repo` - the package change needs a releas"
+    },
+    {
+      "id": "P066",
+      "source_error": 66,
+      "category": "Review Communication / Evidence Integrity",
+      "title": "Posting the Wrong-Environment Screenshot as UAT Evidence (2026-02-27)",
+      "what": "When asked to add UAT evidence to `pipelines-data-architecture` PR `#638`, I first tried to satisfy the request by reusing nearby artifacts: - referenced evidence from PR `#637` - posted a screenshot the user identified as STG, not UAT - had to be corrected and rerun the validation in actual UAT before posting the final proof",
+      "principle": "When asked to add UAT evidence to `pipelines-data-architecture` PR `#638`, I first tried to satisfy the request by reusing nearby artifacts: - referenced evidence from PR `#637` - posted a screenshot the user identified as STG, not UAT - had to be corrected and rerun the validation in actual UAT before posting the final proof"
+    },
+    {
+      "id": "P067",
+      "source_error": 67,
+      "category": "Deployment Workflow / Runtime State Verification",
+      "title": "Treating `airflow-image` PR Merge as PRD Deployment Completion (2026-02-27)",
+      "what": "A recent `airflow-image` promotion gap showed that a merged PR in the source repo is not enough to conclude PRD is actually on the new image. In this case: - `airflow-image` PR `#698` was merged to `prd` - but the downstream `data-infra-deployments` PRD tag update PR `#30431` was still open - therefore PRD had not yet consumed the new image un",
+      "principle": "A recent `airflow-image` promotion gap showed that a merged PR in the source repo is not enough to conclude PRD is actually on the new image. In this case: - `airflow-image` PR `#698` was merged to `prd` - but the downstream `data-infra-deployments` PRD tag update PR `#30431` was still open - therefore PRD had not yet consumed the new image un"
+    },
+    {
+      "id": "P069",
+      "source_error": 69,
+      "category": "Workflow Reliability / Status Contract Integrity",
+      "title": "Allowing False-Green Status Propagation from Program Scrub Prechecks (2026-03-02)",
+      "what": "During scrum incident review, the team identified that a program-scrub flow could return overall green even when latency/wait prechecks failed. Because downstream workflows consumed that status, this created a risk that launch-related actions could proceed under a false success signal.",
+      "principle": "During scrum incident review, the team identified that a program-scrub flow could return overall green even when latency/wait prechecks failed. Because downstream workflows consumed that status, this created a risk that launch-related actions could proceed under a false success signal."
+    },
+    {
+      "id": "P070",
+      "source_error": 70,
+      "category": "PR Review / Scope and Severity Discipline",
+      "title": "Escalating a Robustness Concern to \"Must Fix Before Merge\" Without Ticket-Scope Confirmation (2026-03-04)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** review-quality, false-positive, baseline-check, causality, cross-repo-drift **Related:** `reporting-pipelines` PR `#892`, `data-infra-repo` schema drift discussion on `f_user_activity_daily_agg` **Lesson Applied:** Blocking comments now require an explicit base-vs-head causality checkpoint before posting."
+    },
+    {
+      "id": "P071",
+      "source_error": 71,
+      "category": "PR Review / Causality Verification / False Positive Prevention",
+      "title": "Flagging a Pre-Existing Cross-Repo Drift as a PR Regression Without Baseline Proof (2026-03-05)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** review-quality, false-positive, baseline-check, causality, cross-repo-drift **Related:** `reporting-pipelines` PR `#892`, `data-infra-repo` schema drift discussion on `f_user_activity_daily_agg` **Lesson Applied:** Blocking comments now require an explicit base-vs-head causality checkpoint before posting."
+    },
+    {
+      "id": "P072",
+      "source_error": 72,
+      "category": "Local Airflow / Executor Reliability / Validation Workflow",
+      "title": "Treating Local Airflow Task State as Ground Truth During Pgbouncer and Executor Churn (2026-03-05)",
+      "what": "While validating the local Airflow run `manual__local_20260306T005622Z` for `mysql_bronze_records_created_full_table_data_validation`, many mapped tasks were marked `failed`, `up_for_retry`, or `upstream_failed` even though the underlying Celery task execution had actually succeeded. The run also inherited false `upstream_failed` compare tasks afte",
+      "principle": "While validating the local Airflow run `manual__local_20260306T005622Z` for `mysql_bronze_records_created_full_table_data_validation`, many mapped tasks were marked `failed`, `up_for_retry`, or `upstream_failed` even though the underlying Celery task execution had actually succeeded. The run also inherited false `upstream_failed` compare tasks afte"
+    },
+    {
+      "id": "P073",
+      "source_error": 73,
+      "category": "PR Creation / Self-Review Discipline",
+      "title": "Reviewing My Own PR in Builder Mode Instead of Running a Separate Diff-Based Self-Review (2026-03-06)",
+      "what": "While driving `airflow-operators-repo` PR `#507`, I repeatedly fixed issues only after the GitHub review bot surfaced them. The pattern was consistent: - implement a fix - run tests - push - wait for the bot to catch repo-boundary, filter-before-limit, sentinel-contract, timezone, or `None`-handling issues that I should have caught myself first",
+      "principle": "While driving `airflow-operators-repo` PR `#507`, I repeatedly fixed issues only after the GitHub review bot surfaced them. The pattern was consistent: - implement a fix - run tests - push - wait for the bot to catch repo-boundary, filter-before-limit, sentinel-contract, timezone, or `None`-handling issues that I should have caught myself first"
+    },
+    {
+      "id": "P074",
+      "source_error": 74,
+      "category": "PR Workflow / Review Bot State Management",
+      "title": "Trusting Stale GitHub Review or CI State Without Verifying the Live PR Head (2026-03-06)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** review-quality, false-positive, baseline-check, same-file-diff, docs-drift, causality **Related:** `review-platform` PR `#86`, comments `2897981774`, `2898003657`, `2898028686` **Lesson Applied:** PR review workflow now includes a mandatory same-file base-branch check for semantics and documentation findings before posting."
+    },
+    {
+      "id": "P075",
+      "source_error": 75,
+      "category": "PR Review / Causality Verification / False Positive Prevention",
+      "title": "Flagging a Pre-Existing In-Repo Docs Drift as a PR Regression Without Checking Base Branch (2026-03-06)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** review-quality, false-positive, baseline-check, same-file-diff, docs-drift, causality **Related:** `review-platform` PR `#86`, comments `2897981774`, `2898003657`, `2898028686` **Lesson Applied:** PR review workflow now includes a mandatory same-file base-branch check for semantics and documentation findings before posting."
+    },
+    {
+      "id": "P076",
+      "source_error": 76,
+      "category": "Prompt Hygiene / Token Efficiency / Scope Control",
+      "title": "Leaving Massive Inline Artifacts in the Prompt Instead of Externalizing Scope (2026-03-07)",
+      "what": "Multiple recent sessions accepted huge pasted inputs directly into the working prompt instead of first converting them into files, targeted excerpts, or bounded context artifacts.",
+      "principle": "Multiple recent sessions accepted huge pasted inputs directly into the working prompt instead of first converting them into files, targeted excerpts, or bounded context artifacts."
+    },
+    {
+      "id": "P077",
+      "source_error": 77,
+      "category": "Tool Output Discipline / Transcript Processing / Session Efficiency",
+      "title": "Using Brute-Force Shell and Polling Loops for Transcript and Output-Heavy Tasks (2026-03-07)",
+      "what": "I repeatedly handled transcript-heavy or output-heavy work with the same live shell/polling loop pattern used for interactive debugging.",
+      "principle": "I repeatedly handled transcript-heavy or output-heavy work with the same live shell/polling loop pattern used for interactive debugging."
+    },
+    {
+      "id": "P078",
+      "source_error": 78,
+      "category": "Meta-Ops / Scope Control / Tool Efficiency",
+      "title": "Running Full-Estate Retests and Retrospectives as Single Unbounded Sessions (2026-03-07)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** external-tables, schema-contract, false-positive, consumer-verification, reporting, data-infra-repo **Related:** `data-infra-repo` PR `#5341`, discussion comments `2907528027`, `2907696097`, `2907862064` **Lesson Applied:** Added a canonical PR-review rule in `CLAUDE.md` requiring table-specific consumer/provenance evidence before blocking on external-table contract mismatches."
+    },
+    {
+      "id": "P079",
+      "source_error": 79,
+      "category": "PR Review / Consumer Verification / False Positive Prevention",
+      "title": "Inferring an External-Table Contract From Sibling Patterns Without Table-Specific Consumer Evidence (2026-03-09)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** external-tables, schema-contract, false-positive, consumer-verification, reporting, data-infra-repo **Related:** `data-infra-repo` PR `#5341`, discussion comments `2907528027`, `2907696097`, `2907862064` **Lesson Applied:** Added a canonical PR-review rule in `CLAUDE.md` requiring table-specific consumer/provenance evidence before blocking on external-table contract mismatches."
+    },
+    {
+      "id": "P080",
+      "source_error": 80,
+      "category": "PR Review / Rollout Topology / False Positive Prevention",
+      "title": "Flagging a Cross-Region Review Blocker Without Verifying the Rollout Topology (2026-03-09)",
+      "what": "",
+      "principle": "**Severity:** High **Tags:** pr-review, rollout-topology, region-scope, false-positive, airflow, promotions **Related:** `pipelines-data-architecture` PR `#653`, discussion comments `2907494234`, `2907512149`, `2907526604` **Lesson Applied:** Added a canonical rule in `CLAUDE.md` requiring rollout/topology verification before posting cross-region blockers."
+    },
+    {
+      "id": "P081",
+      "source_error": 81,
+      "category": "PR Review / Cross-Repo Dependency / Analytics Layer",
+      "title": "Reviewing Analytics Layer DAG Without Verifying transform-layer Tag Exists (2026-03-10)",
+      "what": "While reviewing `pipelines-members` PR `#280`, which added `analytics_layer_trigger_dataform.py` with `DATAFORM_TAGS = ['members-analytics']`, I approved the PR without independently checking whether the `members-analytics` tag existed in the `transform-repo` repo. The concern only surfaced because a prior comment on the PR had already flagged",
+      "principle": "While reviewing `pipelines-members` PR `#280`, which added `analytics_layer_trigger_dataform.py` with `DATAFORM_TAGS = ['members-analytics']`, I approved the PR without independently checking whether the `members-analytics` tag existed in the `transform-repo` repo. The concern only surfaced because a prior comment on the PR had already flagged"
+    },
+    {
+      "id": "P082",
+      "source_error": 82,
+      "category": "PR Review / File Context / False Positive Prevention",
+      "title": "Answering \"Is This a False Positive?\" Without Reading the Code First (2026-03-10)",
+      "what": "User linked `https://github.com/example-org/review-platform/pull/88#issuecomment-4014428054` and asked if it was a false positive. The URL contains a specific comment ID. The MCP tool (`get_pr_comments`) returned comments without their GitHub comment IDs \u2014 just \"Comment 1\", \"Comment 2\", etc. \u2014 so I could not directly map the fragment ID to a speci",
+      "principle": "User linked `https://github.com/example-org/review-platform/pull/88#issuecomment-4014428054` and asked if it was a false positive. The URL contains a specific comment ID. The MCP tool (`get_pr_comments`) returned comments without their GitHub comment IDs \u2014 just \"Comment 1\", \"Comment 2\", etc. \u2014 so I could not directly map the fragment ID to a speci"
+    },
+    {
+      "id": "P083",
+      "source_error": 83,
+      "category": "PR Review / File Context / False Positive Prevention",
+      "title": "PR Review \u2014 Reviewing Only the Diff Instead of the Full File, Missing Cross-Subquery Consistency (2026-03-10)",
+      "what": "**Category:** PR Review / File Context / False Positive Prevention",
+      "principle": "**Category:** PR Review / File Context / False Positive Prevention"
+    },
+    {
+      "id": "P084",
+      "source_error": 84,
+      "category": "PR Review / JIRA Context / False Positive Prevention",
+      "title": "PR Review \u2014 Posting a Ticket-Scoped Finding Before Reading the Referenced JIRA (2026-03-10)",
+      "what": "**Category:** PR Review / JIRA Context / False Positive Prevention",
+      "principle": "**Category:** PR Review / JIRA Context / False Positive Prevention"
+    },
+    {
+      "id": "P085",
+      "source_error": 85,
+      "category": "PR Review / API Semantics / False Positive Prevention",
+      "title": "PR Review \u2014 Flagging BigQuery `BadRequest` Retry as a False Positive Without Verifying API Semantics or Repo Precedent (2026-03-10)",
+      "what": "**Category:** PR Review / API Semantics / False Positive Prevention",
+      "principle": "**Category:** PR Review / API Semantics / False Positive Prevention"
+    },
+    {
+      "id": "P086",
+      "source_error": 86,
+      "category": "PR Review / Value-Level Contract / Data Cardinality",
+      "title": "PR Review \u2014 Missed Registry Lookup Uniqueness Bug Because I Didn't Verify Data Cardinality (2026-03-10)",
+      "what": "**Category:** PR Review / Value-Level Contract / Data Cardinality",
+      "principle": "**Category:** PR Review / Value-Level Contract / Data Cardinality"
+    },
+    {
+      "id": "P087",
+      "source_error": 87,
+      "category": "GitHub Review Workflow / Comment Routing / Approval Integrity",
+      "title": "GitHub Comment Target Drift \u2014 Posting or Drafting Against the Wrong Review Object (2026-03-11)",
+      "what": "**Category:** GitHub Review Workflow / Comment Routing / Approval Integrity",
+      "principle": "**Category:** GitHub Review Workflow / Comment Routing / Approval Integrity"
+    },
+    {
+      "id": "P088",
+      "source_error": 88,
+      "category": "GitHub Review State / Stale-Comment Prevention / Verification",
+      "title": "Bot Issue Comments Can Mutate \u2014 Re-Fetch the Exact Comment Before Assessing \"False Positive\" Status (2026-03-11)",
+      "what": "**Category:** GitHub Review State / Stale-Comment Prevention / Verification",
+      "principle": "**Category:** GitHub Review State / Stale-Comment Prevention / Verification"
+    },
+    {
+      "id": "P091",
+      "source_error": 91,
+      "category": "Communication / Scope Control / Approval Discipline",
+      "title": "Treating a Request to \"Draft\" a Diagram as Approval to Implement and Push It (2026-03-11)",
+      "what": "**Category:** Communication / Scope Control / Approval Discipline",
+      "principle": "**Category:** Communication / Scope Control / Approval Discipline"
+    },
+    {
+      "id": "P093",
+      "source_error": 93,
+      "category": "Airflow / Jinja Templating / Generated DAGs / STG Validation",
+      "title": "Jinja-Escaping Fixes for Generated DAGs Must Be Valid in Both the Generator Template and Airflow Runtime (2026-03-12)",
+      "what": "**Category:** Airflow / Jinja Templating / Generated DAGs / STG Validation",
+      "principle": "**Category:** Airflow / Jinja Templating / Generated DAGs / STG Validation"
+    },
+    {
+      "id": "P094",
+      "source_error": 94,
+      "category": "Workflow / PR Creation / Tooling Guardrails",
+      "title": "PR Creation Guardrails Depend on the Actual `gh` Binary in PATH (2026-03-12)",
+      "what": "**Category:** Workflow / PR Creation / Tooling Guardrails",
+      "principle": "**Category:** Workflow / PR Creation / Tooling Guardrails"
+    },
+    {
+      "id": "P095",
+      "source_error": 95,
+      "category": "General",
+      "title": "`z` (zoxide) Fails in Non-Interactive Shells \u2014 Use `cd` (2026-03-12)",
+      "what": "Subagent Bash commands used `z <path>` for directory navigation. This generated repeated `Exit code 127: z:1: command not found: __zoxide_z` errors across multiple sessions (confirmed in session JSONL analysis). Zoxide's `z` command is a shell function injected only into interactive shells via `eval \"$(zoxide init zsh)\"`. Claude's Bash tool runs no",
+      "principle": "Subagent Bash commands used `z <path>` for directory navigation. This generated repeated `Exit code 127: z:1: command not found: __zoxide_z` errors across multiple sessions (confirmed in session JSONL analysis). Zoxide's `z` command is a shell function injected only into interactive shells via `eval \"$(zoxide init zsh)\"`. Claude's Bash tool runs no"
+    },
+    {
+      "id": "P096",
+      "source_error": 96,
+      "category": "General",
+      "title": "Versioned Claude Binary Path Goes Stale After Updates (2026-03-12)",
+      "what": "After a Claude Code version update, error logs showed repeated `ENOENT: no such file or directory, posix_spawn '/opt/homebrew/Caskroom/claude-code/2.1.49/claude'`. The errors clustered in one session and then disappeared.",
+      "principle": "After a Claude Code version update, error logs showed repeated `ENOENT: no such file or directory, posix_spawn '/opt/homebrew/Caskroom/claude-code/2.1.49/claude'`. The errors clustered in one session and then disappeared."
+    },
+    {
+      "id": "P098",
+      "source_error": 98,
+      "category": "PR Review / Environment Selection / Evidence Integrity",
+      "title": "Agent Workflow \u2014 Over-reliance on Context and Interaction (2026-03-13)",
+      "what": "**What Happened:** Historically, I have relied on conversational branching (asking clarifying questions) and reading large chunks of files (relying on my context window) to solve problems. This approach is slow, consumes unnecessary tokens, and fails in automated/constrained environments. I also frequently dropped steps in multi-step tasks because ",
+      "principle": "**What Happened:** Historically, I have relied on conversational branching (asking clarifying questions) and reading large chunks of files (relying on my context window) to solve problems. This approach is slow, consumes unnecessary tokens, and fails in automated/constrained environments. I also frequently dropped steps in multi-step tasks because "
+    },
+    {
+      "id": "P099",
+      "source_error": 99,
+      "category": "PR Review / Environment Selection / Evidence Integrity",
+      "title": "PR Review \u2014 Used DEV Data for a Production-Path Contract Claim (2026-03-13)",
+      "what": "**Category:** PR Review / Environment Selection / Evidence Integrity",
+      "principle": "**Category:** PR Review / Environment Selection / Evidence Integrity"
+    },
+    {
+      "id": "P100",
+      "source_error": 100,
+      "category": "PR Review / Dependency Sequencing / False Positive Prevention",
+      "title": "PR Review \u2014 Posted a Dependency Blocker Before Verifying Merge/Apply Order (2026-03-13)",
+      "what": "**Category:** PR Review / Dependency Sequencing / False Positive Prevention",
+      "principle": "**Category:** PR Review / Dependency Sequencing / False Positive Prevention"
+    },
+    {
+      "id": "P248",
+      "source_error": 248,
+      "category": "PR Communication / Validation Scoping / Reviewer Clarity",
+      "title": "Proving a Negative Using Incomplete CLI/API Output (2026-03-13)",
+      "what": "**What Happened:** When asked if rate limits existed for `gemini-3.1-pro-preview`, I ran a `curl` to a `global` Vertex AI endpoint (which returned 404) and a `gcloud alpha services quota list` (which didn't explicitly list the preview model). Based on these two failures, I confidently asserted that the model \"does not currently exist in Vertex AI.\"",
+      "principle": "**What Happened:** When asked if rate limits existed for `gemini-3.1-pro-preview`, I ran a `curl` to a `global` Vertex AI endpoint (which returned 404) and a `gcloud alpha services quota list` (which didn't explicitly list the preview model). Based on these two failures, I confidently asserted that the model \"does not currently exist in Vertex AI.\""
+    },
+    {
+      "id": "P101",
+      "source_error": 101,
+      "category": "PR Communication / Validation Scoping / Reviewer Clarity",
+      "title": "Posting Praise or \"Working Well\" Comments in PR Reviews (2026-03-14)",
+      "what": "**What Happened:** I posted PR review comments pointing out things that were working well, praising the code, or saying \"this looks good,\" rather than focusing strictly on issues or necessary changes.",
+      "principle": "**What Happened:** I posted PR review comments pointing out things that were working well, praising the code, or saying \"this looks good,\" rather than focusing strictly on issues or necessary changes."
+    },
+    {
+      "id": "P102",
+      "source_error": 102,
+      "category": "PR Communication / Validation Scoping / Reviewer Clarity",
+      "title": "Mixing Validation Routes in One PR Comment Made the Evidence Ambiguous (2026-03-16)",
+      "what": "**Category:** PR Communication / Validation Scoping / Reviewer Clarity",
+      "principle": "**Category:** PR Communication / Validation Scoping / Reviewer Clarity"
+    },
+    {
+      "id": "P120",
+      "source_error": 120,
+      "category": "Validation Planning / Data Safety / Candidate Selection",
+      "title": "UAT Validation Candidate Selection \u2014 Defaulted to `program_fk = 1` Before Proving a Smaller Flowing Alternative Did Not Exist (2026-03-16)",
+      "what": "**Category:** Validation Planning / Data Safety / Candidate Selection",
+      "principle": "**Category:** Validation Planning / Data Safety / Candidate Selection"
+    },
+    {
+      "id": "P121",
+      "source_error": 121,
+      "category": "Validation Planning / DBRE Risk Guidance / Database Pipeline Metadata",
+      "title": "Overcorrected Away From Internal Program 1 and Then Broadened Shard Scope Before Respecting DBRE Risk Guidance (2026-03-16)",
+      "what": "**Category:** Validation Planning / DBRE Risk Guidance / Database Pipeline Metadata",
+      "principle": "**Category:** Validation Planning / DBRE Risk Guidance / Database Pipeline Metadata"
+    },
+    {
+      "id": "P123",
+      "source_error": 123,
+      "category": "Data Investigation / BigQuery / Context Awareness",
+      "title": "Slow BigQuery JSON Querying and Failure to Connect Context with Recently Reviewed PRs (2026-03-17)",
+      "what": "**Category:** Data Investigation / BigQuery / Context Awareness",
+      "principle": "**Category:** Data Investigation / BigQuery / Context Awareness"
+    },
+    {
+      "id": "P124",
+      "source_error": 124,
+      "category": "Testing / Dataflow / Evidence Quality",
+      "title": "Used Functional Tests (DirectRunner) as Evidence for a Dataflow Job Fix (2026-03-17)",
+      "what": "**Category:** Testing / Dataflow / Evidence Quality",
+      "principle": "**Category:** Testing / Dataflow / Evidence Quality"
+    },
+    {
+      "id": "P126",
+      "source_error": 126,
+      "category": "Architecture / streaming-pipeline / Evidence Collection",
+      "title": "streaming-pipeline Writes to Bronze GCS, Not Bronze Native BQ \u2014 Waiting for BQ Evidence When GCS Is the Source (2026-03-17)",
+      "what": "**Category:** Architecture / streaming-pipeline / Evidence Collection",
+      "principle": "**Category:** Architecture / streaming-pipeline / Evidence Collection"
+    },
+    {
+      "id": "P127",
+      "source_error": 127,
+      "category": "Testing / streaming-pipeline / Evidence Methodology",
+      "title": "Synthetic AVRO DELETE Pattern \u2014 Building PR-Branch Evidence Without a Real MySQL Delete (2026-03-17)",
+      "what": "**Category:** Testing / streaming-pipeline / Evidence Methodology",
+      "principle": "**Category:** Testing / streaming-pipeline / Evidence Methodology"
+    },
+    {
+      "id": "P128",
+      "source_error": 128,
+      "category": "Shell / macOS / Local Testing",
+      "title": "macOS Has No `timeout` Command \u2014 Use Background Job + Sleep Loop Instead (2026-03-17)",
+      "what": "During the DirectRunner execution for the cascade smoke test, used `timeout 90 python streaming-pipeline.py ...` to bound the run time. The command silently failed on macOS because macOS does not ship GNU `timeout`. The process exited with an error immediately instead of running the pipeline.",
+      "principle": "During the DirectRunner execution for the cascade smoke test, used `timeout 90 python streaming-pipeline.py ...` to bound the run time. The command silently failed on macOS because macOS does not ship GNU `timeout`. The process exited with an error immediately instead of running the pipeline."
+    },
+    {
+      "id": "P129",
+      "source_error": 129,
+      "category": "Architecture / Pub/Sub / Testing Pattern",
+      "title": "Pub/Sub Fan-Out Enables Parallel Observation Without Interference (2026-03-17)",
+      "what": "**Category:** Architecture / Pub/Sub / Testing Pattern",
+      "principle": "**Category:** Architecture / Pub/Sub / Testing Pattern"
+    },
+    {
+      "id": "P131",
+      "source_error": 131,
+      "category": "Architecture / Cascade Delete / Evidence",
+      "title": "key_mirror.is_bronze_layer_synthetic_delete_added Is the Authoritative Full-Chain Signal (2026-03-17)",
+      "what": "**Category:** Architecture / Cascade Delete / Evidence",
+      "principle": "**Category:** Architecture / Cascade Delete / Evidence"
+    },
+    {
+      "id": "P132",
+      "source_error": 132,
+      "category": "General",
+      "title": "data-infra-repo Terraform PRs \u2014 Do Not Flag INFORMATION_SCHEMA Column Presence as a Blocker (2026-03-18)",
+      "what": "**Mistake:** Flagging a finding like \"Terraform will fail to apply when modifying `f_point_transaction` because columns `external_number`/`memo` still exist in INFORMATION_SCHEMA\" as a blocker on an data-infra-repo PR.",
+      "principle": "**Mistake:** Flagging a finding like \"Terraform will fail to apply when modifying `f_point_transaction` because columns `external_number`/`memo` still exist in INFORMATION_SCHEMA\" as a blocker on an data-infra-repo PR."
+    },
+    {
+      "id": "P133",
+      "source_error": 133,
+      "category": "General",
+      "title": "Ignoring System Rules Due to \"Shell-First\" Bias (2026-03-18)",
+      "what": "**Mistake:** I fell into a trial-and-error loop of running `bq ls | grep` and guessing GCP regions to find a BigQuery table, directly violating the explicit system rule to use `mcp_bq-schema_tool_search_tables`. When corrected, I just added the rule to `mem0` instead of addressing why I ignored the rule in the first place.",
+      "principle": "**Mistake:** I fell into a trial-and-error loop of running `bq ls | grep` and guessing GCP regions to find a BigQuery table, directly violating the explicit system rule to use `mcp_bq-schema_tool_search_tables`. When corrected, I just added the rule to `mem0` instead of addressing why I ignored the rule in the first place."
+    },
+    {
+      "id": "P134",
+      "source_error": 134,
+      "category": "General",
+      "title": "Execution Inefficiencies and \"Bash Fallback\" Anti-Patterns (2026-03-18)",
+      "what": "**Mistake:** Exhibiting multiple execution inefficiencies in a single session: stepping through local git commands sequentially, falling back to raw bash (`grep`, `cat`, `head`) instead of native tools, failing to parallelize tool calls, and triggering expensive pre-push hooks on a branch that was already behind the remote.",
+      "principle": "**Mistake:** Exhibiting multiple execution inefficiencies in a single session: stepping through local git commands sequentially, falling back to raw bash (`grep`, `cat`, `head`) instead of native tools, failing to parallelize tool calls, and triggering expensive pre-push hooks on a branch that was already behind the remote."
+    },
+    {
+      "id": "P250",
+      "source_error": 250,
+      "category": "GitHub API / PR Review Workflow / Reply Posting",
+      "title": "Routing UAT Unblockers Through the Standard STG Pipeline (2026-03-18)",
+      "what": "**Mistake:** I routed PR #5800 (which was specifically created to unblock a failed `uat-data_change` deployment) through the standard `master -> stg` path. Because the `stg` pipeline's \"merge branch upwards\" step only fires for emergency changes, the fix stalled in STG and never reached `uat-data_change`, requiring a manual follow-up PR (#5801) to ",
+      "principle": "**Mistake:** I routed PR #5800 (which was specifically created to unblock a failed `uat-data_change` deployment) through the standard `master -> stg` path. Because the `stg` pipeline's \"merge branch upwards\" step only fires for emergency changes, the fix stalled in STG and never reached `uat-data_change`, requiring a manual follow-up PR (#5801) to "
+    },
+    {
+      "id": "P136",
+      "source_error": 136,
+      "category": "GitHub API / PR Review Workflow / Reply Posting",
+      "title": "Polluted Diffs from Reusing STG/Master Branches for Environment-Specific PRs (2026-03-18)",
+      "what": "**Mistake:** When creating PR #5801 to target `uat-data_change`, I reused the existing branch (`TICKET-N-uat-data-change-unblock`) which was originally cut from `stg`/`master`. Because `uat-data_change` is behind `stg`, the PR diff accidentally included unrelated commits from other developers (like TICKET-N and TICKET-N) that were present in `st",
+      "principle": "**Mistake:** When creating PR #5801 to target `uat-data_change`, I reused the existing branch (`TICKET-N-uat-data-change-unblock`) which was originally cut from `stg`/`master`. Because `uat-data_change` is behind `stg`, the PR diff accidentally included unrelated commits from other developers (like TICKET-N and TICKET-N) that were present in `st"
+    },
+    {
+      "id": "P137",
+      "source_error": 137,
+      "category": "GitHub API / PR Review Workflow / Reply Posting",
+      "title": "Misinterpreting CI Validation Scripts on MySQL Data Change Files (2026-03-18)",
+      "what": "**Mistake:** I flagged a BigQuery dry-run failure (`Syntax error: Expected end of input but got keyword USE`) on a `.sql` file inside the `database/data_change/` directory as a real error. I failed to recognize that `validate-changed-files.sh` was incorrectly applying a BigQuery validation script to a MySQL file, resulting in a false positive.",
+      "principle": "**Mistake:** I flagged a BigQuery dry-run failure (`Syntax error: Expected end of input but got keyword USE`) on a `.sql` file inside the `database/data_change/` directory as a real error. I failed to recognize that `validate-changed-files.sh` was incorrectly applying a BigQuery validation script to a MySQL file, resulting in a false positive."
+    },
+    {
+      "id": "P138",
+      "source_error": 138,
+      "category": "GitHub API / PR Review Workflow / Reply Posting",
+      "title": "GitHub PR Discussion Replies Use `in_reply_to` on the PR Comments Endpoint, Not `/replies` (2026-03-19)",
+      "what": "**Category:** GitHub API / PR Review Workflow / Reply Posting",
+      "principle": "**Category:** GitHub API / PR Review Workflow / Reply Posting"
+    },
+    {
+      "id": "P139",
+      "source_error": 139,
+      "category": "GitHub Review Workflow / Target Routing / Approval Integrity",
+      "title": "`#pullrequestreview-...` URLs Are Review Summaries, Not Interchangeable with PR Comments or Inline Threads (2026-03-19)",
+      "what": "**Category:** GitHub Review Workflow / Target Routing / Approval Integrity",
+      "principle": "**Category:** GitHub Review Workflow / Target Routing / Approval Integrity"
+    },
+    {
+      "id": "P140",
+      "source_error": 140,
+      "category": "PR Review / Environment Contract / False Positive Prevention",
+      "title": "Flagging Unsupported Local Interpreter Compatibility as a PR Blocker (2026-03-19)",
+      "what": "**Category:** PR Review / Environment Contract / False Positive Prevention",
+      "principle": "**Category:** PR Review / Environment Contract / False Positive Prevention"
+    },
+    {
+      "id": "P141",
+      "source_error": 141,
+      "category": "Dataflow / Deployment Operations / Capacity Triage",
+      "title": "na-ne1 UAT Dataflow `n1-standard-1` Launcher Failures Can Be GCP Capacity, Not Our Config (2026-03-19)",
+      "what": "**Category:** Dataflow / Deployment Operations / Capacity Triage",
+      "principle": "**Category:** Dataflow / Deployment Operations / Capacity Triage"
+    },
+    {
+      "id": "P142",
+      "source_error": 142,
+      "category": "Tooling / AI Assistant Setup / Vertex AI",
+      "title": "ob1 Vertex AI Integration Requires a Multi-Layer Proxy to Work with Claude Models (2026-03-19)",
+      "what": "**Category:** Tooling / AI Assistant Setup / Vertex AI",
+      "principle": "**Category:** Tooling / AI Assistant Setup / Vertex AI"
+    },
+    {
+      "id": "P143",
+      "source_error": 143,
+      "category": "PR Review / Baseline Verification / False Positive Prevention",
+      "title": "Using Local `origin/master...HEAD` Instead of Live PR Base Created a False-Positive Scope Finding (2026-03-20)",
+      "what": "**Category:** PR Review / Baseline Verification / False Positive Prevention",
+      "principle": "**Category:** PR Review / Baseline Verification / False Positive Prevention"
+    },
+    {
+      "id": "P144",
+      "source_error": 144,
+      "category": "PR Review / Communication / User Intent",
+      "title": "Collapsing Duplicate Review Drafts When the User Asked for All Comments (2026-03-20)",
+      "what": "**Category:** PR Review / Communication / User Intent",
+      "principle": "**Category:** PR Review / Communication / User Intent"
+    },
+    {
+      "id": "P145",
+      "source_error": 145,
+      "category": "Investigation / Data Pipeline / SCD2 / ADW Backfill",
+      "title": "Misdiagnosing Deleted `group_user` SCD2 Rows with NULL End Timestamps as a Sync Bug (2026-03-24)",
+      "what": "**Category:** Investigation / Data Pipeline / SCD2 / ADW Backfill",
+      "principle": "**Category:** Investigation / Data Pipeline / SCD2 / ADW Backfill"
+    },
+    {
+      "id": "P148",
+      "source_error": 148,
+      "category": "Testing / streaming-pipeline / Dataflow / Evidence Scoping",
+      "title": "Treating Batch or Bronze-Only Dataflow Evidence as Enough for a Requested Streaming Validation (2026-04-08)",
+      "what": "**Category:** Testing / streaming-pipeline / Dataflow / Evidence Scoping",
+      "principle": "**Category:** Testing / streaming-pipeline / Dataflow / Evidence Scoping"
+    },
+    {
+      "id": "P149",
+      "source_error": 149,
+      "category": "PR Communication / Evidence Mapping / Reviewer Clarity",
+      "title": "Posting PR Replies Where the Evidence Did Not Match the Reviewer's Exact Question (2026-04-08)",
+      "what": "**Category:** PR Communication / Evidence Mapping / Reviewer Clarity",
+      "principle": "**Category:** PR Communication / Evidence Mapping / Reviewer Clarity"
+    },
+    {
+      "id": "P150",
+      "source_error": 150,
+      "category": "Architecture / streaming-pipeline / Cache Key Design",
+      "title": "Assuming File-Path-Scoped Schema Caching Was Good Enough for cdc-service Workloads (2026-04-08)",
+      "what": "**Category:** Architecture / streaming-pipeline / Cache Key Design",
+      "principle": "**Category:** Architecture / streaming-pipeline / Cache Key Design"
+    },
+    {
+      "id": "P151",
+      "source_error": 151,
+      "category": "Code Style / Communication / Repository Hygiene",
+      "title": "Reintroducing Emoji Characters in Code or Logs While Applying Functional Fixes (2026-04-08)",
+      "what": "**Category:** Code Style / Communication / Repository Hygiene",
+      "principle": "**Category:** Code Style / Communication / Repository Hygiene"
+    },
+    {
+      "id": "P152",
+      "source_error": 152,
+      "category": "transform-layer / Analytics Layer Review",
+      "title": "Assuming `getSqlWithMetricsForAnalytics` Uses `ref()` for `layerFeatureConfigTable` (2026-04-09)",
+      "what": "Reviewed transform-repo PR #123. Flagged `layerFeatureConfigTable: \"layer_feature_config\"` as a compile blocker, claiming `getSqlWithMetricsForAnalytics` resolves this via transform-layer's `ref()` and therefore requires a declaration file in the repo. No declaration file existed in the diff. Posted as a blocker.",
+      "principle": "Reviewed transform-repo PR #123. Flagged `layerFeatureConfigTable: \"layer_feature_config\"` as a compile blocker, claiming `getSqlWithMetricsForAnalytics` resolves this via transform-layer's `ref()` and therefore requires a declaration file in the repo. No declaration file existed in the diff. Posted as a blocker."
+    },
+    {
+      "id": "P153",
+      "source_error": 153,
+      "category": "transform-layer / Analytics Layer Review",
+      "title": "Treating `featureName` in `getSqlWithMetricsForAnalytics` as a Display/Copy Field (2026-04-09)",
+      "what": "In the same transform-repo PR #123 review, flagged `featureName: \"program_list\"` on `dim_program_region.sqlx` as a copy-paste error because the table is `dim_program_region`, not a program list.",
+      "principle": "In the same transform-repo PR #123 review, flagged `featureName: \"program_list\"` on `dim_program_region.sqlx` as a copy-paste error because the table is `dim_program_region`, not a program list."
+    },
+    {
+      "id": "P154",
+      "source_error": 154,
+      "category": "PR Review / BigLake Schema",
+      "title": "Including `client_pk`/`file_timestamp` as Schema Fields in BigLake External Table YAMLs (2026-04-10)",
+      "what": "Approved data-infra-repo PR #5478 (TICKET-N) which added new BigLake external table YAMLs for `product_catalog` and `product_catalog_region` in the marketplace domain. Both YAMLs incorrectly included `client_pk` (NULLABLE STRING) and `file_timestamp` (NULLABLE STRING) as explicit schema fields after the payload se",
+      "principle": "Approved data-infra-repo PR #5478 (TICKET-N) which added new BigLake external table YAMLs for `product_catalog` and `product_catalog_region` in the marketplace domain. Both YAMLs incorrectly included `client_pk` (NULLABLE STRING) and `file_timestamp` (NULLABLE STRING) as explicit schema fields after the payload se"
+    },
+    {
+      "id": "P155",
+      "source_error": 155,
+      "category": "Testing / Validation / PR Review",
+      "title": "Testing the Mechanism Instead of the Business Goal (streaming-pipeline PR 245) (2026-04-11)",
+      "what": "In `streaming-pipeline` PR 245, the goal was to improve performance by caching AVRO schemas for a full day instead of hourly to reduce GCS I/O. The developer initially tested the caching mechanism by processing two records *inside the same single file*.",
+      "principle": "In `streaming-pipeline` PR 245, the goal was to improve performance by caching AVRO schemas for a full day instead of hourly to reduce GCS I/O. The developer initially tested the caching mechanism by processing two records *inside the same single file*."
+    },
+    {
+      "id": "P156",
+      "source_error": 156,
+      "category": "PR Creation / Validation",
+      "title": "Pushing Code to GitHub Before Resolving review-platform Review Findings (2026-04-11)",
+      "what": "**What Happened:** When creating PRs or pushing updates, agents sometimes push code to GitHub before fully running the `review-platform` review tool locally or before ensuring all critical issues have been fixed and verified by a clean re-run.",
+      "principle": "**What Happened:** When creating PRs or pushing updates, agents sometimes push code to GitHub before fully running the `review-platform` review tool locally or before ensuring all critical issues have been fixed and verified by a clean re-run."
+    },
+    {
+      "id": "P158",
+      "source_error": 158,
+      "category": "Communication / Chat Clutter",
+      "title": "Unnecessarily Displaying File Contents in Chat (2026-04-11)",
+      "what": "**What Happened:** I printed the contents of files (or large blocks of text from files) in my responses after reading or editing them.",
+      "principle": "**What Happened:** I printed the contents of files (or large blocks of text from files) in my responses after reading or editing them."
+    },
+    {
+      "id": "P160",
+      "source_error": 160,
+      "category": "PR Review / Communication",
+      "title": "Commenting on What Works Well in PR Reviews (2026-04-14)",
+      "what": "**What Happened:** In PR reviews for assertion promotion PRs (#131, #121, #216, #139), I included positive commentary like \"Excellent coverage\", \"Clean assertion set\", \"Otherwise excellent\", \"Overall looking excellent\", \"Nice work\", etc.",
+      "principle": "**What Happened:** In PR reviews for assertion promotion PRs (#131, #121, #216, #139), I included positive commentary like \"Excellent coverage\", \"Clean assertion set\", \"Otherwise excellent\", \"Overall looking excellent\", \"Nice work\", etc."
+    },
+    {
+      "id": "P161",
+      "source_error": 161,
+      "category": "PR Review / Domain Knowledge",
+      "title": "Flagging Intentional `WHERE tenant_key > 0` Pattern in Assertion Reviews (2026-04-14)",
+      "what": "**What Happened:** In reviews of transform-layer assertion PRs (#131, #121, #216, #139), I flagged `WHERE tenant_key > 0` as a potential issue, suggesting it should be removed or documented because it won't detect violations where `tenant_key \u2264 0`.",
+      "principle": "**What Happened:** In reviews of transform-layer assertion PRs (#131, #121, #216, #139), I flagged `WHERE tenant_key > 0` as a potential issue, suggesting it should be removed or documented because it won't detect violations where `tenant_key \u2264 0`."
+    },
+    {
+      "id": "P162",
+      "source_error": 162,
+      "category": "PR Review / SQL / Data Contracts",
+      "title": "Assuming Removed `coalesce` Fallback is Automatically a Problem (2026-04-14)",
+      "what": "**What Happened:** In transform-repo PR #131, I flagged the removal of `coalesce(uts.redeem_only, u_scd2.is_redeem_only)` to just `u_scd2.is_redeem_only` as a data contract issue requiring verification, assuming it could cause NULLs if the SCD2 join fails.",
+      "principle": "**What Happened:** In transform-repo PR #131, I flagged the removal of `coalesce(uts.redeem_only, u_scd2.is_redeem_only)` to just `u_scd2.is_redeem_only` as a data contract issue requiring verification, assuming it could cause NULLs if the SCD2 join fails."
+    },
+    {
+      "id": "P163",
+      "source_error": 163,
+      "category": "PR Review / Pattern Verification / Domain Knowledge",
+      "title": "Giving Contradictory Advice Between Related PRs Without Verifying Standard Pattern First (2026-04-14)",
+      "what": "**Category:** PR Review / Pattern Verification / Domain Knowledge",
+      "principle": "**Category:** PR Review / Pattern Verification / Domain Knowledge"
+    },
+    {
+      "id": "P164",
+      "source_error": 164,
+      "category": "PR Review / transform-layer Syntax / Assertion Management",
+      "title": "Missing Trailing Comma Before `disabled: true` in SQLX Config Blocks (2026-04-15)",
+      "what": "**Category:** PR Review / transform-layer Syntax / Assertion Management",
+      "principle": "**Category:** PR Review / transform-layer Syntax / Assertion Management"
+    },
+    {
+      "id": "P166",
+      "source_error": 166,
+      "category": "Database / SQL / Schema Verification",
+      "title": "Wrong MySQL Column Names in news_feed_event INSERT (2026-04-15)",
+      "what": "**Category:** Database / SQL / Schema Verification",
+      "principle": "**Category:** Database / SQL / Schema Verification"
+    },
+    {
+      "id": "P168",
+      "source_error": 168,
+      "category": "PR Review / transform-layer Tag Verification",
+      "title": "False Positive transform-layer Tag Blocker Due to Stale State Check (2026-04-16)",
+      "what": "**Category:** PR Review / transform-layer Tag Verification",
+      "principle": "**Category:** PR Review / transform-layer Tag Verification"
+    },
+    {
+      "id": "P169",
+      "source_error": 169,
+      "category": "PR Creation / Database Data Change / Validation Safety",
+      "title": "Database Retry PR Carried the Wrong Ticket and Repeated Unsafe Insert Patterns (2026-04-16)",
+      "what": "**Category:** PR Creation / Database Data Change / Validation Safety",
+      "principle": "**Category:** PR Creation / Database Data Change / Validation Safety"
+    },
+    {
+      "id": "P170",
+      "source_error": 170,
+      "category": "Codex Workflow / Tool Orchestration / Session Efficiency",
+      "title": "Recent Codex Sessions Overused Serial Read Steps and PTY Polling for Read-Only Work (2026-04-17)",
+      "what": "**Category:** Codex Workflow / Tool Orchestration / Session Efficiency",
+      "principle": "**Category:** Codex Workflow / Tool Orchestration / Session Efficiency"
+    },
+    {
+      "id": "P171",
+      "source_error": 171,
+      "category": "Database / data_change/shards / SQL Safety",
+      "title": "Missing NOT NULL Column in Shard Data Change Script \u2014 Runtime Failure After Pipeline Submission (2026-04-17)",
+      "what": "**Category:** Database / data_change/shards / SQL Safety",
+      "principle": "**Category:** Database / data_change/shards / SQL Safety"
+    },
+    {
+      "id": "P172",
+      "source_error": 172,
+      "category": "Data Pipeline, MySQL, SCD1/SCD2",
+      "title": "Atomic Transaction Timestamp Ordering in MySQL Binlog",
+      "what": "",
+      "principle": "- Never rely solely on source timestamp for ordering - Always use log file and log position for CDC events - Implement split load for all SCD1/SCD2 tables"
+    },
+    {
+      "id": "P175",
+      "source_error": 175,
+      "category": "Data Pipeline, Validation, SCD1/SCD2",
+      "title": "Validation False Positives Due to Timing Differences",
+      "what": "",
+      "principle": "- Don't validate values when atomic transaction issues exist - Use time windows instead of exact interval matching - Account for natural timing differences between SCD1 and SCD2 - Monitor validation failure patterns to identify systemic issues"
+    },
+    {
+      "id": "P177",
+      "source_error": 177,
+      "category": "Data Pipeline, Schema Management, CDC",
+      "title": "Schema Change Ordering - MySQL Before Warehouse Causes Manual Recovery",
+      "what": "**Category:** Data Pipeline, Schema Management, CDC **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)",
+      "principle": "**Category:** Data Pipeline, Schema Management, CDC **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)"
+    },
+    {
+      "id": "P178",
+      "source_error": 178,
+      "category": "Data Pipeline, Bronze Layer, Validation",
+      "title": "Migration Validation Gap - Green DAGs Masked Data Loss",
+      "what": "**Category:** Data Pipeline, Bronze Layer, Validation **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)",
+      "principle": "**Category:** Data Pipeline, Bronze Layer, Validation **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)"
+    },
+    {
+      "id": "P179",
+      "source_error": 179,
+      "category": "Infrastructure, GCS, Bronze Layer, Approval Process",
+      "title": "GCS Retention Policy Approval on Bronze Tables",
+      "what": "**Category:** Infrastructure, GCS, Bronze Layer, Approval Process **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)",
+      "principle": "**Category:** Infrastructure, GCS, Bronze Layer, Approval Process **Date:** 2026-04-15 **Source:** Scrum Recording (2026-04-15)"
+    },
+    {
+      "id": "P181",
+      "source_error": 181,
+      "category": "PR Review / Airflow / Jinja Templating / False Positive Prevention",
+      "title": "`Param(None)` Does Not Neutralize Jinja `'None'` in Airflow DAG Params (2026-04-22)",
+      "what": "**Category:** PR Review / Airflow / Jinja Templating / False Positive Prevention",
+      "principle": "**Category:** PR Review / Airflow / Jinja Templating / False Positive Prevention"
+    },
+    {
+      "id": "P213",
+      "source_error": 213,
+      "category": "PR Review / BigLake vs External Table",
+      "title": "Applying BigLake Terraform Partition Restriction to Standard BQ External Tables (2026-05-05)",
+      "what": "**Category:** PR Review / BigLake vs External Table",
+      "principle": "**Category:** PR Review / BigLake vs External Table"
+    },
+    {
+      "id": "P215",
+      "source_error": 215,
+      "category": "Data Safety / Warehouse Deletes / CDC Semantics",
+      "title": "Repairing Missing Warehouse Deletes with Hard Deletes (2026-05-09)",
+      "what": "**Category:** Data Safety / Warehouse Deletes / CDC Semantics",
+      "principle": "**Category:** Data Safety / Warehouse Deletes / CDC Semantics"
+    },
+    {
+      "id": "P218",
+      "source_error": 218,
+      "category": "Deployment Workflow / Airflow Promotion / Shared Package Coordination",
+      "title": "Promoting Shared Airflow Changes Without Cross-Change Coordination (2026-05-09)",
+      "what": "",
+      "principle": "- When delivering infrastructure or CI/CD pipeline changes, never rely entirely on mocked unit tests. - Always include an integration/functional test script that hits real infrastructure (e.g., dry-runs or isolated test prefixes) to prove the end-to-end flow works."
+    },
+    {
+      "id": "P231",
+      "source_error": 231,
+      "category": "General",
+      "title": "Failing to Provide Manual Output Evidence",
+      "what": "",
+      "principle": "- Never post simulated output as the sole proof of functionality. - Always perform manual verification against real infrastructure (`gcloud`, `gsutil`, `bq`). - Paste the exact CLI output (or screenshots) in the PR as undeniable evidence."
+    },
+    {
+      "id": "P232",
+      "source_error": 232,
+      "category": "General",
+      "title": "Missing Referential Integrity Check for Keys",
+      "what": "",
+      "principle": "- When a configuration file references a schema column (e.g., `user_key_column`, `partition_column`), always perform a strict referential integrity check against the actual schema definition to ensure the column exists."
+    },
+    {
+      "id": "P233",
+      "source_error": 233,
+      "category": "PR Review / Airflow / Jinja Templating",
+      "title": "Schema-Only Changes Skipping Sync Workflows",
+      "what": "",
+      "principle": "- Ensure CI/CD sync workflows handle logic or schema-only changes correctly. - If a core schema change can invalidate existing configs, the pipeline must force a full resync or re-evaluation of all dependent assets, not just skip the job."
+    },
+    {
+      "id": "P234",
+      "source_error": 234,
+      "category": "PR Review / Airflow / Jinja Templating",
+      "title": "Using Hardcoded Path Indices",
+      "what": "",
+      "principle": "- Never blindly extract data using hardcoded path indices. - Always validate the expected directory shape/anchor (e.g., `environment/<env>/domains/<domain>/bq/<dataset>`) before parsing it to fail-fast on structural changes."
+    },
+    {
+      "id": "P235",
+      "source_error": 235,
+      "category": "PR Review / Airflow / Jinja Templating",
+      "title": "Accidental Approval of Database Schema Changes Without Warehouse Setup (PR #6160)",
+      "what": "**What Happened:** Database PR `https://github.com/example-org/database/pull/6160` (MySQL schema changes) was approved by mistake. The PR was approved without first verifying that the corresponding columns were added to the Bronze/Bronze Native (BN) tables in `data-infra-repo` and ensuring proper synchronization across the warehouse layers.",
+      "principle": "**What Happened:** Database PR `https://github.com/example-org/database/pull/6160` (MySQL schema changes) was approved by mistake. The PR was approved without first verifying that the corresponding columns were added to the Bronze/Bronze Native (BN) tables in `data-infra-repo` and ensuring proper synchronization across the warehouse layers."
+    },
+    {
+      "id": "P182",
+      "source_error": 182,
+      "category": "PR Review / Airflow / Jinja Templating",
+      "title": "False Positive PR Review - Flagging Intentional f-string/Jinja Nesting in Airflow Templates",
+      "what": "**Category:** PR Review / Airflow / Jinja Templating **Date:** 2026-04-23 **PR:** `reporting-pipelines` PR #928",
+      "principle": "**Category:** PR Review / Airflow / Jinja Templating **Date:** 2026-04-23 **PR:** `reporting-pipelines` PR #928"
+    },
+    {
+      "id": "P184",
+      "source_error": 184,
+      "category": "Jira Scope / AI Agent Governance / data-infra-repo / Pub/Sub",
+      "title": "Ambiguous Jira Scope Let Agents Reintroduce Out-of-Scope Pub/Sub DLT and Log Tables (2026-04-30)",
+      "what": "**Category:** Jira Scope / AI Agent Governance / data-infra-repo / Pub/Sub **Date:** 2026-04-30 **Ticket:** TICKET-N **PRs:** `data-infra-repo` PR #5678, PR #5703",
+      "principle": "**Category:** Jira Scope / AI Agent Governance / data-infra-repo / Pub/Sub **Date:** 2026-04-30 **Ticket:** TICKET-N **PRs:** `data-infra-repo` PR #5678, PR #5703"
+    },
+    {
+      "id": "P187",
+      "source_error": 187,
+      "category": "Airflow / STG Validation / DAG Discovery / Promotion Testing",
+      "title": "Deleted DAG Files Can Remain as Active Airflow Metadata (2026-05-01)",
+      "what": "**Category:** Airflow / STG Validation / DAG Discovery / Promotion Testing **Date:** 2026-05-01 **Ticket:** TICKET-N **PRs:** `pipelines-data-architecture` PR #692",
+      "principle": "**Category:** Airflow / STG Validation / DAG Discovery / Promotion Testing **Date:** 2026-05-01 **Ticket:** TICKET-N **PRs:** `pipelines-data-architecture` PR #692"
+    },
+    {
+      "id": "P188",
+      "source_error": 188,
+      "category": "Architecture / cdc-service / data-infra-repo / PR Review",
+      "title": "cdc-service Backfill strategy and Guard Comments (Locked vs Open)",
+      "what": "**Category:** Architecture / cdc-service / data-infra-repo / PR Review **Date:** 2026-05-02 **PRs:** `data-infra-repo` PR #5704",
+      "principle": "**Category:** Architecture / cdc-service / data-infra-repo / PR Review **Date:** 2026-05-02 **PRs:** `data-infra-repo` PR #5704"
+    },
+    {
+      "id": "P189",
+      "source_error": 189,
+      "category": "Tooling / Gemini CLI / Configuration",
+      "title": "Gemini CLI MCP Server Deactivation (Missing \"disabled\": true support)",
+      "what": "**Category:** Tooling / Gemini CLI / Configuration **Date:** 2026-04-21 **Session ID:** `feeaae1a`",
+      "principle": "**Category:** Tooling / Gemini CLI / Configuration **Date:** 2026-04-21 **Session ID:** `feeaae1a`"
+    },
+    {
+      "id": "P191",
+      "source_error": 191,
+      "category": "Performance / AI Agents / PR Review / Orchestration",
+      "title": "Marking RateLimitError as Non-Retryable in Parallel Orchestration",
+      "what": "**Category:** Performance / AI Agents / PR Review / Orchestration **Date:** 2026-04-25 **Session ID:** `497b5312`",
+      "principle": "**Category:** Performance / AI Agents / PR Review / Orchestration **Date:** 2026-04-25 **Session ID:** `497b5312`"
+    },
+    {
+      "id": "P192",
+      "source_error": 192,
+      "category": "Data Architecture / PII Obfuscation / Investigation",
+      "title": "Conflating Bronze (BigLake/GCS) with Bronze Native when Asserting Obfuscation Scope",
+      "what": "**Category:** Data Architecture / PII Obfuscation / Investigation **Date:** 2026-05-04",
+      "principle": "**Category:** Data Architecture / PII Obfuscation / Investigation **Date:** 2026-05-04"
+    },
+    {
+      "id": "P193",
+      "source_error": 193,
+      "category": "Schema / PR Review",
+      "title": "False positive on REQUIRED schema columns for Backfills",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P195",
+      "source_error": 195,
+      "category": "PR Review / Airflow / SCD1",
+      "title": "Flagging Missing `WHEN NOT MATCHED` on SCD1 Tables Relying on Source `delete_flag`",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P196",
+      "source_error": 196,
+      "category": "PR Review / BigQuery Optimization",
+      "title": "Recommending Partitioning for Very Small Tables",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P197",
+      "source_error": 197,
+      "category": "PR Review / Schema Evolution",
+      "title": "Recommending `NULLABLE` to `REQUIRED` Change on Existing Datalake Tables",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P198",
+      "source_error": 198,
+      "category": "PR Review / Reporting DAGs",
+      "title": "Flagging Missing `source_region` in Unique Columns when `client_pk` is Unique",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P199",
+      "source_error": 199,
+      "category": "PR Review / DAG Generation",
+      "title": "Flagging Duplicated Logic between YAML Config and Python DAG",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P200",
+      "source_error": 200,
+      "category": "PR Review / Airflow Loops",
+      "title": "Flagging Loop Variable Leak in Many-to-One Reporting DAGs",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P201",
+      "source_error": 201,
+      "category": "PR Review / transform-layer Integration",
+      "title": "Suggesting transform-layer Tags in Airflow Repositories",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P202",
+      "source_error": 202,
+      "category": "PR Review / Environment Config",
+      "title": "Flagging Dropped Regions in Dev Environment Gold Layer",
+      "what": "",
+      "principle": ""
+    },
+    {
+      "id": "P203",
+      "source_error": 203,
+      "category": "PR Review / Schema Design",
+      "title": "Flagging Missing Audit Fields on Custom Query Native Tables",
+      "what": "**Context:** Working on TICKET-N, TICKET-N, and TICKET-N in the ai-tools repository.",
+      "principle": "**Context:** Working on TICKET-N, TICKET-N, and TICKET-N in the ai-tools repository."
+    },
+    {
+      "id": "P204",
+      "source_error": 204,
+      "category": "PR Review / Data Types",
+      "title": "Suggesting Strict Typing over Source Alignment",
+      "what": "**Context:** Working on TICKET-N, TICKET-N, and TICKET-N in the ai-tools repository.",
+      "principle": "**Context:** Working on TICKET-N, TICKET-N, and TICKET-N in the ai-tools repository."
+    },
+    {
+      "id": "P205",
+      "source_error": 205,
+      "category": "PR Review / Schema Design",
+      "title": "Flagging `NUMERIC` Type as Incompatible for External Tables",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P206",
+      "source_error": 206,
+      "category": "PR Review / GCS Paths",
+      "title": "Flagging GCS Path Inconsistency in Many-to-One DAGs",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P207",
+      "source_error": 207,
+      "category": "PR Review / Schema Design",
+      "title": "Flagging Composite Key Elements as Non-PK Attributes",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P208",
+      "source_error": 208,
+      "category": "PR Review / Noise Reduction",
+      "title": "Posting Stylistic or Optimization Nits",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P209",
+      "source_error": 209,
+      "category": "PR Review / Meta-Ops",
+      "title": "Leaving Bad Reviews Unedited After Debunking",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P210",
+      "source_error": 210,
+      "category": "PR Review / Database & Warehouse Coordination / Strict Deployment Order",
+      "title": "Database PR Approved Without Ensuring Column Prep in Bronze Tables",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P221",
+      "source_error": 221,
+      "category": "PR Review / Comment Accuracy",
+      "title": "Branch Poisoning and Multi-Ticket Mismatch (2026-05-10)",
+      "what": "",
+      "principle": "- Run `git branch -a` and `gh pr list` at the start of every session to map the landscape. - Use `mktemp` for all test artifacts (especially evil runners) to avoid race conditions and cleanup traps. - Trigger `review-platform-review` *immediately* after every push to catch regressions and architectural drift early. - Keep a \"/tmp/backup\" of your feature-specific code when performing complex git operations."
+    },
+    {
+      "id": "P222",
+      "source_error": 222,
+      "category": "PR Review / Comment Accuracy",
+      "title": "Referencing Non-Public Endpoints in Posted PR Comment",
+      "what": "**Date:** 2026-05-12 **Category:** PR Review / Data Cardinality / False Positive Prevention",
+      "principle": "**Date:** 2026-05-12 **Category:** PR Review / Data Cardinality / False Positive Prevention"
+    },
+    {
+      "id": "P223",
+      "source_error": 223,
+      "category": "Tool Usage / Attribution",
+      "title": "Tool Misidentification \u2014 Claimed Claude When Gemini Was Used",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets)."
+    },
+    {
+      "id": "P224",
+      "source_error": 224,
+      "category": "Claims Accuracy",
+      "title": "False Characterization of Pricing / Cost Tracking Availability",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets). - Use the `\u2753 q:` or `\ud83d\udfe1 risk:` tag for \"breaking\" changes in DEV to solicit the author's plan first. - Re-read **Error 132** (don't flag INFORMATION_SCHEMA columns as blockers) - applies the same \"don't be too rigid with infra PRs\" principle."
+    },
+    {
+      "id": "P225",
+      "source_error": 225,
+      "category": "Posting / Approval Flow",
+      "title": "Premature Posting Without Adequate Testing",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets). - Use the `\u2753 q:` or `\ud83d\udfe1 risk:` tag for \"breaking\" changes in DEV to solicit the author's plan first. - Re-read **Error 132** (don't flag INFORMATION_SCHEMA columns as blockers) - applies the same \"don't be too rigid with infra PRs\" principle."
+    },
+    {
+      "id": "P226",
+      "source_error": 226,
+      "category": "State Verification",
+      "title": "Incorrect Assumption About PR Creation / State",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets). - Use the `\u2753 q:` or `\ud83d\udfe1 risk:` tag for \"breaking\" changes in DEV to solicit the author's plan first. - Re-read **Error 132** (don't flag INFORMATION_SCHEMA columns as blockers) - applies the same \"don't be too rigid with infra PRs\" principle."
+    },
+    {
+      "id": "P228",
+      "source_error": 228,
+      "category": "PR Review / Template Logic / False Positive Prevention",
+      "title": "Misidentifying Missing Placeholder Substitution Due to Layered Templating",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets). - Use the `\u2753 q:` or `\ud83d\udfe1 risk:` tag for \"breaking\" changes in DEV to solicit the author's plan first. - Re-read **Error 132** (don't flag INFORMATION_SCHEMA columns as blockers) - applies the same \"don't be too rigid with infra PRs\" principle."
+    },
+    {
+      "id": "P229",
+      "source_error": 229,
+      "category": "PR Review, BigQuery Infrastructure, Context Awareness",
+      "title": "PR Review / BigQuery Infrastructure / Context Awareness",
+      "what": "",
+      "principle": "- Check if the table is newly added or part of a recent feature (context from parent tickets). - Use the `\u2753 q:` or `\ud83d\udfe1 risk:` tag for \"breaking\" changes in DEV to solicit the author's plan first. - Re-read **Error 132** (don't flag INFORMATION_SCHEMA columns as blockers) - applies the same \"don't be too rigid with infra PRs\" principle."
+    },
+    {
+      "id": "P251",
+      "source_error": 251,
+      "category": "PR Review / Context Validation / False Positive Prevention",
+      "title": "Providing PR Feedback Without Thoroughly Reading All Comments",
+      "what": "**Date:** 2026-05-12 **Category:** PR Review / Context Validation / False Positive Prevention",
+      "principle": "**Date:** 2026-05-12 **Category:** PR Review / Context Validation / False Positive Prevention"
+    },
+    {
+      "id": "P236",
+      "source_error": 236,
+      "category": "PR Review / Local-Upstream Drift / False Positive Prevention",
+      "title": "PR Review - Citing Local Assistant Guidelines with Upstream Drift (2026-05-22)",
+      "what": "**Date:** 2026-05-22 **Category:** PR Review / Local-Upstream Drift / False Positive Prevention",
+      "principle": "**Date:** 2026-05-22 **Category:** PR Review / Local-Upstream Drift / False Positive Prevention"
+    },
+    {
+      "id": "P238",
+      "source_error": 238,
+      "category": "PR Review / Ingestion Gap Analysis / False Positive Prevention",
+      "title": "False Positive Ingestion and Deletion Sync Lag Diagnoses on UAT/Live Programs",
+      "what": "**Date:** 2026-06-01 **Category:** PR Review / Ingestion Gap Analysis / False Positive Prevention",
+      "principle": "**Date:** 2026-06-01 **Category:** PR Review / Ingestion Gap Analysis / False Positive Prevention"
+    },
+    {
+      "id": "P239",
+      "source_error": 239,
+      "category": "PR Review / Ingestion Gap Analysis / Scrub Verification",
+      "title": "Triaging Ingestion Failures for Decommissioned/Scrubbed Programs Without Checking Scrub DAG",
+      "what": "**Date:** 2026-06-01 **Category:** PR Review / Ingestion Gap Analysis / Scrub Verification",
+      "principle": "**Date:** 2026-06-01 **Category:** PR Review / Ingestion Gap Analysis / Scrub Verification"
+    },
+    {
+      "id": "P240",
+      "source_error": 240,
+      "category": "Incident Resolution / Root Cause Analysis / PRD Support Communication",
+      "title": "Combining Region-Specific RCA and Incident Summaries in Region-Specific Alert Threads",
+      "what": "**Date:** 2026-06-02 **Category:** Incident Resolution / Root Cause Analysis / PRD Support Communication",
+      "principle": "**Date:** 2026-06-02 **Category:** Incident Resolution / Root Cause Analysis / PRD Support Communication"
+    },
+    {
+      "id": "P241",
+      "source_error": 241,
+      "category": "Data Pipeline / Validation Logic / transform-layer Integration",
+      "title": "Assuming Gold Validation is Caught Up Because streaming-pipeline Processor Caught Up (2026-06-02)",
+      "what": "**Date:** 2026-06-02 **Category:** Data Pipeline / Validation Logic / transform-layer Integration",
+      "principle": "**Date:** 2026-06-02 **Category:** Data Pipeline / Validation Logic / transform-layer Integration"
+    },
+    {
+      "id": "P242",
+      "source_error": 242,
+      "category": "Data Infrastructure / data-infra-repo / BigLake External Tables / Terraform Apply Failure",
+      "title": "Including Partition Columns `client_pk` and `file_timestamp` in BigLake External Table Schema (Recurrence) (2026-06-04)",
+      "what": "**Date:** 2026-06-04 **Category:** Data Infrastructure / data-infra-repo / BigLake External Tables / Terraform Apply Failure",
+      "principle": "**Date:** 2026-06-04 **Category:** Data Infrastructure / data-infra-repo / BigLake External Tables / Terraform Apply Failure"
+    },
+    {
+      "id": "P243",
+      "source_error": 243,
+      "category": "Process / Documentation Drift / AI-Agentic Metadata / data-infra-repo / PR Review",
+      "title": "Documentation Drift and AI-Agentic Hallucinations in Repository Instructions (CLAUDE.md) (2026-06-06)",
+      "what": "**Date:** 2026-06-06 **Category:** Process / Documentation Drift / AI-Agentic Metadata / data-infra-repo / PR Review",
+      "principle": "**Date:** 2026-06-06 **Category:** Process / Documentation Drift / AI-Agentic Metadata / data-infra-repo / PR Review"
+    },
+    {
+      "id": "P245",
+      "source_error": 245,
+      "category": "GitHub Review Workflow / Comment Routing / Verification-Before-Completion",
+      "title": "GitHub PR Review \u2014 Claiming Inline Comments Posted Without Executing Script (2026-06-15)",
+      "what": "**Date:** 2026-06-15 **Category:** GitHub Review Workflow / Comment Routing / Verification-Before-Completion",
+      "principle": "**Date:** 2026-06-15 **Category:** GitHub Review Workflow / Comment Routing / Verification-Before-Completion"
+    },
+    {
+      "id": "P246",
+      "source_error": 246,
+      "category": "Git Workflow / Pull Request Creation",
+      "title": "Git Workflow / Pull Request Creation \u2014 Branching from Feature Branch instead of Master (2026-06-15)",
+      "what": "**Date:** 2026-06-15 **Category:** Git Workflow / Pull Request Creation",
+      "principle": "**Date:** 2026-06-15 **Category:** Git Workflow / Pull Request Creation"
+    },
+    {
+      "id": "P253",
+      "source_error": 253,
+      "category": "Tooling / Gemini CLI / Configuration",
+      "title": "Confusing Gemini CLI's Layered Context Files",
+      "what": "**Category:** Tooling / Gemini CLI / Configuration",
+      "principle": "**Category:** Tooling / Gemini CLI / Configuration"
+    },
+    {
+      "id": "P254",
+      "source_error": 254,
+      "category": "Verification / Communication / Claims Accuracy",
+      "title": "Premature Claims of Completion/Verification Without Actually Doing the Work (2026-07-04)",
+      "what": "**Date:** 2026-07-04 **Category:** Verification / Communication / Claims Accuracy",
+      "principle": "**Date:** 2026-07-04 **Category:** Verification / Communication / Claims Accuracy"
+    },
+    {
+      "id": "P255",
+      "source_error": 255,
+      "category": "Safety / Process Discipline / Guardrail Integrity",
+      "title": "Bypassing Established Guardrails or Safety Checks Under Perceived User Pressure (2026-07-04)",
+      "what": "**Date:** 2026-07-04 **Category:** Safety / Process Discipline / Guardrail Integrity",
+      "principle": "**Date:** 2026-07-04 **Category:** Safety / Process Discipline / Guardrail Integrity"
+    },
+    {
+      "id": "P256",
+      "source_error": 256,
+      "category": "Infrastructure / Platform Architecture / Verification Before Recommendation",
+      "title": "Recommending an Untested \"Self-Service\" Platform Mechanism as a Fix Without Finding a Live Working Example (2026-07-06)",
+      "what": "**Category:** Infrastructure / Platform Architecture / Verification Before Recommendation",
+      "principle": "**Category:** Infrastructure / Platform Architecture / Verification Before Recommendation"
+    },
+    {
+      "id": "P257",
+      "source_error": 257,
+      "category": "PR Review / CI Debugging / Evidence-First Verification",
+      "title": "Accepting a Bot's Root-Cause Diagnosis by Symptom Match Without Independently Re-Deriving the Cause (2026-07-06)",
+      "what": "**Category:** PR Review / CI Debugging / Evidence-First Verification",
+      "principle": "**Category:** PR Review / CI Debugging / Evidence-First Verification"
+    }
+  ]
+}
