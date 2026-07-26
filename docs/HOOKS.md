@@ -5,6 +5,7 @@
 | `RatingCapture.hook.ts` | UserPromptSubmit | ratings.jsonl + skill/agent tags |
 | `FailurePatternReminder.hook.ts` | UserPromptSubmit | ACE bullets + graph preflight |
 | `VerificationReminder.hook.ts` | PostToolUse Write/Edit | Enforce live test verification before completion |
+| `PRDescriptionReminder.hook.ts` | PostToolUse Bash (git push) | Remind agent to update GitHub PR body after push |
 | `EnforcementGate.hook.ts` | Stop | block/warn completion & claim failures |
 | `SecurityValidator.hook.ts` | PreToolUse Bash/Edit/Write | blast-radius patterns |
 | `EpistemicRules.hook.ts` | UserPromptSubmit | confidence tags |
