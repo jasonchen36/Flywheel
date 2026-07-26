@@ -103,6 +103,7 @@ Next steps:
    bash $HOOKS/harness-session-end.sh
 
 2. Wire PreToolUse Bash → SecurityValidator.hook.ts
+   PostToolUse Write/Edit → VerificationReminder.hook.ts
    Stop → EnforcementGate.hook.ts
    UserPromptSubmit → RatingCapture + FailurePatternReminder
 

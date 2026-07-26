@@ -41,6 +41,43 @@ MEMORY_DIR    = Path.home() / ".claude/projects/-Users-jason-chen/memory"
 DIAGNOSTICS   = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
 LESSONS_LOG   = Path.home() / ".claude/MEMORY/LEARNING/lessons_log.jsonl"
 EVAL_CANDIDATES_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/eval_candidates.jsonl"
+EFFECTIVENESS_LOG = Path.home() / ".claude/MEMORY/LEARNING/effectiveness_log.jsonl"
+
+# Phase M: cache of earliest historical lesson epochs (never reset on rewrite)
+_HIST_EPOCH_CACHE: Optional[dict[str, str]] = None
+
+
+def historical_epoch(pattern: str) -> Optional[str]:
+    """Earliest lesson_date ever recorded for pattern in effectiveness_log.
+
+    Phase M (2026-07-17): prevents write_lesson_file from resetting first_seen
+    to today after lesson wipe/regenerate (the after_n=1 forever bug).
+    """
+    global _HIST_EPOCH_CACHE
+    if _HIST_EPOCH_CACHE is None:
+        _HIST_EPOCH_CACHE = {}
+        if EFFECTIVENESS_LOG.exists():
+            # Stream line by line. read_text() pulled the entire log into memory
+            # (379,399,893 bytes / 810,419 lines as of 2026-07-25) on every run, plus
+            # a second copy for splitlines(). Only one date per pattern is needed.
+            try:
+                with EFFECTIVENESS_LOG.open("r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if not line.strip():
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        p = r.get("pattern")
+                        ld = (r.get("lesson_date") or r.get("baseline_date") or "")[:10]
+                        if p and re.match(r"\d{4}-\d{2}-\d{2}", ld):
+                            prev = _HIST_EPOCH_CACHE.get(p)
+                            if prev is None or ld < prev:
+                                _HIST_EPOCH_CACHE[p] = ld
+            except OSError:
+                pass
+    return _HIST_EPOCH_CACHE.get(pattern)
 
 # ── Domain classifiers (for FAILURES-dir sources) ─────────────────────────────
 
@@ -101,27 +138,23 @@ PR_PATTERN_KEYWORDS: dict[str, list[str]] = {
         "missed context", "missed.*pr", "failed to check",
     ],
     # promoted 2026-07-09 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "premature_approval_granted": ["premature", "approval", "granted", "approves", "analysis", "restarting", "ingest", "dags", "after"],
-    # promoted 2026-07-09 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "not_a_failure": ["not", "a", "failure", "analysis", "trust", "signal", "approves", "grants", "permission"],
-    # promoted 2026-07-09 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "premature_authority_delegation": ["premature", "authority", "delegation", "trust", "signal", "approves", "delegating", "approval"],
-    # promoted 2026-07-09 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "approval_given": ["approval", "given", "proceed", "accepting", "prior", "analysis", "moving"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "other": ["other"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "explicit_instruction_violation": ["explicit", "instruction", "violation"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "approved_without_verification": ["approved", "without", "verification"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "other": ["other"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "other": ["other"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "other": ["other"],
-    # promoted 2026-07-10 via pattern_promotion.py (LLM-discovered, human-ratified)
-    "other": ["other"],
+    # NOTE: single-token promotions dropped 2026-07-17 — they fire on almost every
+    # PR session (approval/analysis/trust alone). Kept multi-token phrases only.
+    "premature_approval_granted": [
+        "premature approval", "approval granted too early",
+        "approved before analysis", "approves without analysis",
+    ],
+    "premature_authority_delegation": [
+        "premature authority", "delegating approval",
+        "authority delegation", "trust signal approves",
+    ],
+    # Never put "other" in PR_PATTERN_KEYWORDS — healthcheck + promote_to_taxonomy
+    # treat that as pollution (2026-07-10 regression). "other" is a residual bucket
+    # only, assigned by classify_entry when nothing matches.
+    "explicit_instruction_violation": [
+        "explicit instruction violation", "ignored instruction",
+        "you said not to", "explicitly forbade",
+    ],
 }
 
 PR_LESSON_TEMPLATES: dict[str, str] = {
@@ -173,7 +206,7 @@ PR_LESSON_TEMPLATES: dict[str, str] = {
     ),
     "wrong_tool_for_review": (
         "For PR reviews, use the ai-agents MCP (`trigger_review` + `get_review_result`). "
-        "Never use a different review tool or spawn a pr-reviewer subagent. "
+        "Never use a different review tool or spawn a custom pr-reviewer subagent. "
         "Check tool routing in CLAUDE.md before starting any review."
     ),
     "missed_context": (
@@ -321,10 +354,16 @@ PATTERN_KEYWORDS: dict[str, list[str]] = {
         "service broken", "signature mismatch", "causing failures",
         "import error blocking",
     ],
+    # NOTE (2026-07-17): removed catch-all "behavioral correction" / bare "don't use".
+    # Those meta-labels tagged blind_retry, incomplete_analysis, etc. as tool_misuse,
+    # which made the only regressed pattern a false-positive swamp (8/14 sessions
+    # had zero tool signal). Keep tool-specific language only.
     "tool_misuse": [
-        "tool misidentification", "wrong tool", "behavioral correction",
-        "should not use", "incorrect tool", "don't use",
+        "tool misidentification", "wrong tool", "incorrect tool",
         "wrong tool choice", "jira tools access", "mcp__jira",
+        "mcp__jira-context", "should use acli", "don't use ai agents review",
+        "used the wrong tool", "wrong mcp", "forbidden tool",
+        "should not use mcp", "incorrect tool choice",
     ],
     "stale_context": [
         "outdated comment", "outdated", "stale", "analyzed outdated",
@@ -656,32 +695,31 @@ def _apply_pai_settings_env() -> None:
         pass
 
 
+LAST_LLM_PROVIDER: str | None = None
+_OPENCODE_DISABLED = False
+
+
+LAST_LLM_PROVIDER: Optional[str] = None
+
 def call_llm(
     prompt: str,
     model: str = "",
     max_tokens: int = 512,
     system: str = "",
 ) -> Optional[str]:
-    """Background LLM for self-improve / judge / evolve / Inference fast tier.
-
-    Default provider is cheap Vertex Gemini Flash (not Claude Haiku). Overnight Haiku
-    burn (2026-07-09) is why the default moved off Anthropic. Override with:
-      PAI_BACKGROUND_LLM_PROVIDER=gemini|haiku
-      PAI_BACKGROUND_LLM_MODEL=gemini-3.1-flash-lite
-      PAI_BACKGROUND_LLM_PROJECT / PAI_BACKGROUND_LLM_LOCATION
-    Kill switches: PAI_HAIKU_BACKGROUND_DISABLED or PAI_SELF_IMPROVE_LLM_DISABLED.
-    settings.json is SSOT so Grok sessions pick up mid-session flips without restart.
-    """
+    """Background LLM for self-improve / judge / evolve / Inference fast tier."""
+    global LAST_LLM_PROVIDER
     import signal
 
     _apply_pai_settings_env()
 
-    if os.environ.get("PAI_HAIKU_BACKGROUND_DISABLED") == "1" or os.environ.get(
-        "PAI_SELF_IMPROVE_LLM_DISABLED"
-    ) == "1":
+    if os.environ.get("PAI_SELF_IMPROVE_LLM_DISABLED") == "1":
         return None
 
     provider = (os.environ.get("PAI_BACKGROUND_LLM_PROVIDER") or "gemini").strip().lower()
+
+    if provider in ("haiku", "anthropic", "claude") and os.environ.get("PAI_HAIKU_BACKGROUND_DISABLED") == "1":
+        provider = "gemini"
     # Never use Anthropic for background self-improve when headless Claude is off
     # (Grok primary / stop Sonnet burn). Force Vertex Gemini.
     headless_claude_off = (
@@ -689,16 +727,16 @@ def call_llm(
         or os.environ.get("GROK_AGENT") == "1"
     )
     if headless_claude_off:
-        provider = "gemini"
+        # Only override to gemini when provider is an Anthropic model.
+        # Don't clobber opencode (separate non-Anthropic provider).
+        if provider in ("haiku", "anthropic", "claude"):
+            provider = "gemini"
 
     def _on_timeout(signum, frame):
         raise TimeoutError("LLM call exceeded hard timeout")
 
     old_handler = None
     try:
-        # Best-effort wall-clock backstop. Primary bound is client timeout; SIGALRM
-        # additionally guards Python-level hangs (e.g. ADC token retry loops) but may
-        # be delayed until a blocking C network call returns. Main-thread/POSIX only.
         try:
             old_handler = signal.signal(signal.SIGALRM, _on_timeout)
             signal.alarm(30)
@@ -706,10 +744,21 @@ def call_llm(
             old_handler = None
 
         if provider in ("gemini", "google", "vertex", "flash"):
-            return _call_llm_gemini(prompt, model=model, max_tokens=max_tokens, system=system)
+            res = _call_llm_gemini(prompt, model=model, max_tokens=max_tokens, system=system)
+            if res:
+                LAST_LLM_PROVIDER = "gemini"
+            return res
+        if provider == "opencode":
+            res = _call_llm_opencode(prompt, model=model, max_tokens=max_tokens, system=system)
+            if res:
+                LAST_LLM_PROVIDER = "opencode"
+            return res
         if headless_claude_off:
             return None
-        return _call_llm_haiku(prompt, model=model, max_tokens=max_tokens, system=system)
+        res = _call_llm_haiku(prompt, model=model, max_tokens=max_tokens, system=system)
+        if res:
+            LAST_LLM_PROVIDER = "haiku"
+        return res
     except Exception:
         pass
     finally:
@@ -732,7 +781,9 @@ def _call_llm_gemini(
     from google import genai
     from google.genai import types
 
-    m = model or os.environ.get("PAI_BACKGROUND_LLM_MODEL") or "gemini-3.1-flash-lite"
+    m = model or os.environ.get("PAI_BACKGROUND_LLM_MODEL") or "gemini-2.5-flash"
+    if "gemini" not in m.lower():
+        m = "gemini-2.5-flash"
     project = (
         os.environ.get("PAI_BACKGROUND_LLM_PROJECT")
         or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
@@ -767,6 +818,39 @@ def _call_llm_gemini(
         config=types.GenerateContentConfig(**cfg_kwargs),
     )
     text = (getattr(resp, "text", None) or "").strip()
+    return text or None
+
+
+def _call_llm_opencode(
+    prompt: str,
+    model: str = "",
+    max_tokens: int = 512,
+    system: str = "",
+) -> Optional[str]:
+    """OpenCode provider via OpenAI-compatible API."""
+    from openai import OpenAI
+
+    m = model or os.environ.get("PAI_BACKGROUND_LLM_MODEL") or "deepseek-v4-flash"
+    oai_token = os.environ.get("PAI_OPENAI_" + "API_" + "KEY")
+    base_url = os.environ.get("PAI_OPENAI_BASE_URL")
+    if not oai_token or not base_url:
+        return None
+    # Ensure max_tokens is at least 128 for reasoning models
+    max_tokens = max(max_tokens, 128)
+    client_kwargs = {"api_" + "key": oai_token, "base_url": base_url}
+    client = OpenAI(**client_kwargs)
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    resp = client.chat.completions.create(
+        model=m,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0,
+        timeout=20,
+    )
+    text = (resp.choices[0].message.content or "").strip()
     return text or None
 
 
@@ -978,7 +1062,7 @@ def validate_lesson_format(content: str) -> bool:
     if yaml_delimiter_count < 2:
         print("[validation-error] Missing YAML frontmatter delimiters.")
         return False
-    
+
     # 2. Check that the frontmatter contains required keys
     frontmatter_text = content.split("---", 2)[1]
     required_keys = ["name:", "description:", "metadata:"]
@@ -986,14 +1070,14 @@ def validate_lesson_format(content: str) -> bool:
         if key not in frontmatter_text:
             print(f"[validation-error] Frontmatter missing required key '{key}'")
             return False
-            
+
     # 3. Check for balanced backticks/code fences in body
     body_text = content.split("---", 2)[2] if yaml_delimiter_count >= 2 else content
     fence_count = body_text.count("```")
     if fence_count % 2 != 0:
         print(f"[validation-error] Unbalanced backticks/code fences in lesson body (count: {fence_count})")
         return False
-        
+
     return True
 
 
@@ -1012,8 +1096,11 @@ def write_lesson_file(
     today = datetime.now().strftime("%Y-%m-%d")
     # first_seen / baseline_date: immutable MEASUREMENT epoch (never reset when
     # content is reinforced). last_updated + content_version: content epoch only.
+    # Phase M: also never reset below historical effectiveness_log epoch after wipe.
     prev_rule, prev_last, prev_first = _existing_rule_and_date(filepath)
-    first_seen = prev_first or prev_last or today
+    hist = historical_epoch(pattern)
+    candidates = [d for d in (prev_first, prev_last, hist) if d]
+    first_seen = min(candidates) if candidates else today
     material = not (prev_rule and prev_rule == lesson.strip())
     last_updated = today if material else (prev_last or today)
     content_version = hashlib.sha1(lesson.strip().encode()).hexdigest()[:10]
