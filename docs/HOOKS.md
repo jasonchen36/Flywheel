@@ -4,6 +4,7 @@
 |---|---|---|
 | `RatingCapture.hook.ts` | UserPromptSubmit | ratings.jsonl + skill/agent tags |
 | `FailurePatternReminder.hook.ts` | UserPromptSubmit | ACE bullets + graph preflight |
+| `VerificationReminder.hook.ts` | PostToolUse Write/Edit | Enforce live test verification before completion |
 | `EnforcementGate.hook.ts` | Stop | block/warn completion & claim failures |
 | `SecurityValidator.hook.ts` | PreToolUse Bash/Edit/Write | blast-radius patterns |
 | `EpistemicRules.hook.ts` | UserPromptSubmit | confidence tags |
