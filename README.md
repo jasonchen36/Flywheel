@@ -4,7 +4,7 @@ Portable **agent self-improvement harness** for coding agents (Claude Code, Grok
 
 Inspired by [Lilian Weng — Harness Engineering for Self-Improvement](https://lilianweng.github.io/posts/2026-07-04-harness/) and ACE-style playbooks.
 
-This is the **employer-agnostic core**: ratings → lessons → effectiveness → skill guardrails → enforcement → held-out gates → optional Graphiti memory. It does **not** ship Achievers-specific workflows, repos, or tribal process.
+This is the **employer-agnostic core**: ratings → lessons → effectiveness → skill guardrails → enforcement → held-out gates → optional Graphiti memory. It does **not** ship company-specific workflows, repos, or tribal process.
 
 ## What you get
 

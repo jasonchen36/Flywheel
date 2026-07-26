@@ -125,7 +125,7 @@ graphiti:
       description: "Companies, institutions, groups, or formal entities"
     - name: "Document"
       description: "Information content in various forms (books, articles, reports, etc.)"
-    # Achievers / PAI domain types (2026-07-09) — improve extraction for work graph
+    # Custom PAI domain types (2026-07-09) — improve extraction for work graph
     - name: "Repository"
       description: "GitHub/Git repo (e.g. abattoir-data, duplopy-airflow, dataform-*). Prefer over Topic/Object."
     - name: "Environment"
