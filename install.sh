@@ -76,6 +76,7 @@ cp "$ROOT/docs/memory.md" "$STATE/memory.md"
 echo "  wrote STATE/principles.md + STATE/memory.md"
 
 touch "$STATE/graphiti_pending_episodes.jsonl"
+touch "$STATE/graph_preflight.md"
 
 
 # Personal skill pack (portable)
@@ -103,6 +104,7 @@ Next steps:
    bash $HOOKS/harness-session-end.sh
 
 2. Wire PreToolUse Bash → SecurityValidator.hook.ts
+   PostToolUse Write/Edit → VerificationReminder.hook.ts
    Stop → EnforcementGate.hook.ts
    UserPromptSubmit → RatingCapture + FailurePatternReminder
 
