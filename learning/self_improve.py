@@ -206,7 +206,7 @@ PR_LESSON_TEMPLATES: dict[str, str] = {
     ),
     "wrong_tool_for_review": (
         "For PR reviews, use the ai-agents MCP (`trigger_review` + `get_review_result`). "
-        "Never use a different review tool or spawn achievers-pr-reviewer subagent. "
+        "Never use a different review tool or spawn a custom pr-reviewer subagent. "
         "Check tool routing in CLAUDE.md before starting any review."
     ),
     "missed_context": (
@@ -788,7 +788,7 @@ def _call_llm_gemini(
         os.environ.get("PAI_BACKGROUND_LLM_PROJECT")
         or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
         or os.environ.get("VERTEX_AI_PROJECT")
-        or "achievers-dev"
+        or "example-dev"
     )
     # Prefer PAI_BACKGROUND_LLM_LOCATION. Default global: gemini-3.1-flash-lite is
     # available on Vertex global for this project (404 on us-central1). Do not
@@ -865,7 +865,7 @@ def _call_llm_haiku(
 
     m = model or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5@20251001")
     kwargs: dict = {
-        "project_id": os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "achievers-dev"),
+        "project_id": os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "example-dev"),
         "region": os.environ.get("CLOUD_ML_REGION")
                   or os.environ.get("ANTHROPIC_VERTEX_REGION", "us-east5"),
         "timeout": 20.0,
