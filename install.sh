@@ -76,6 +76,7 @@ cp "$ROOT/docs/memory.md" "$STATE/memory.md"
 echo "  wrote STATE/principles.md + STATE/memory.md"
 
 touch "$STATE/graphiti_pending_episodes.jsonl"
+touch "$STATE/graph_preflight.md"
 
 
 # Personal skill pack (portable)

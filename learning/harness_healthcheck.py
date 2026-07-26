@@ -25,11 +25,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-HOME = Path.home()
-LEARNING = HOME / ".claude/MEMORY/LEARNING"
-STATE = HOME / ".claude/MEMORY/STATE"
-MEM = HOME / ".claude/projects/-Users-jason-chen/memory"
-SIGNALS = LEARNING / "SIGNALS"
+from harness_paths import HARNESS_HOME, LEARNING, STATE, SIGNALS
+MEM = HARNESS_HOME / "memory"
 
 sys.path.insert(0, str(LEARNING))
 try:
@@ -251,15 +248,14 @@ def main() -> int:
     }
 
     # Critical paths
+    HOOKS = HARNESS_HOME / "hooks"
     critical = {
         "sync_graph_memory": LEARNING / "sync_graph_memory.py",
         "flush_graphiti_pending": LEARNING / "flush_graphiti_pending.py",
         "session_graphiti_autoseed": LEARNING / "session_graphiti_autoseed.py",
         "self_harness": LEARNING / "self_harness.py",
-        "session_end": HOME / ".claude/hooks/claude-session-end",
-        "enforcement_gate": HOME / ".claude/hooks/EnforcementGate.hook.ts",
-        "pai_learning": HOME / ".pi/agent/extensions/pai-learning-harness.ts",
-        "pai_enforcement": HOME / ".pi/agent/extensions/pai-enforcement-gate.ts",
+        "session_end": HOOKS / "harness-session-end.sh",
+        "enforcement_gate": HOOKS / "EnforcementGate.hook.ts",
     }
     missing = [k for k, p in critical.items() if not p.exists()]
     report["checks"]["files"] = {"missing": missing}

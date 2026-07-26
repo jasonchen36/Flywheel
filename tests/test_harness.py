@@ -62,13 +62,30 @@ def test_verification_reminder_hook_stdout():
     assert "test.py" in proc.stdout
 
 
-def test_harness_healthcheck_execution():
+def test_harness_healthcheck_execution(tmp_path, monkeypatch):
+    harness_home = tmp_path / ".claude"
+    monkeypatch.setenv("HARNESS_HOME", str(harness_home))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # Run install.sh to seed the temporary harness home directory
+    install_script = ROOT / "install.sh"
+    install_proc = subprocess.run(
+        ["bash", str(install_script)],
+        cwd=str(ROOT),
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HARNESS_HOME": str(harness_home), "HOME": str(tmp_path)}
+    )
+    assert install_proc.returncode == 0
+
+    # Now run harness_healthcheck.py in the initialized environment
     health_script = LEARNING / "harness_healthcheck.py"
     proc = subprocess.run(
         [sys.executable, str(health_script)],
         cwd=str(LEARNING),
         text=True,
-        capture_output=True
+        capture_output=True,
+        env={**os.environ, "HARNESS_HOME": str(harness_home), "HOME": str(tmp_path)}
     )
     assert proc.returncode == 0
     assert "OK: True" in proc.stdout
