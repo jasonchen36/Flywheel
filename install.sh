@@ -85,7 +85,7 @@ if [ -d "$ROOT/skills" ]; then
   rsync -a --exclude 'README.md' "$ROOT/skills/" "$HARNESS_HOME/skills/"
   rsync -a --exclude 'README.md' "$ROOT/skills/" "$HOME/.agents/skills/" 2>/dev/null || true
   mkdir -p "$HOME/.pi/agent/skills"
-  for s in self-improve model-tiering pi-agent instincts caveman; do
+  for s in self-improve model-tiering pi-agent instincts caveman thermo-nuclear-code-quality-review; do
     if [ -d "$ROOT/skills/$s" ]; then
       mkdir -p "$HOME/.pi/agent/skills/$s"
       rsync -a "$ROOT/skills/$s/" "$HOME/.pi/agent/skills/$s/"
