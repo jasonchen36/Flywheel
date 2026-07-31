@@ -21,6 +21,14 @@ Pair with `memory.md` (harness logic) in this repo.
 8. **Default model tier down**; escalate only for hard design/high-blast work.
 9. **Do not approve on red CI** or missing status checks.
 10. **Interrupted review is incomplete** — restart, do not ship half a pass.
+11. **3-Category Hallucination Architecture** — Checkable reality requires automated harness walls (type checkers, linters, tests, bq dry-runs, symbol verifier); uncheckable tribal reality requires grounding + flagging for human review; business judgment requires human accountability.
+12. **Mandatory 5-Source Pre-Flight Grounding** — BEFORE starting any task or writing code/docs, ALWAYS verify grounded truth across all applicable sources: JIRA (specs), AKB (architecture graph), Confluence (requirements), RTFM (design specs/docs), and GitHub repos (source code).
+13. **Mandatory Immediate Memory Persistence on Review Feedback** — Whenever review feedback, PR comments, human corrections, or verification errors occur, fixing local code/text is only half the job. You MUST IMMEDIATELY persist the feedback, root cause, and prevention rule to Graphiti/memory and patch relevant skills so the mistake NEVER recurs.
+14. **Source Symbol Grounding** — Before citing class names, method signatures, or package names in design docs or PRs, run `rtk verify-doc-symbols.sh <file>` or `rtk rg <symbol>` against target repos. Never guess or invent class/API signatures (e.g. `WarehouseDatasetUtility` vs `WarehouseDatasetFactory`).
+15. **Parse-Time Dev Fallback Prohibition** — NEVER put hardcoded parse-time dev fallbacks (`us-central1`, `achievers-dev`) in production DAG code. Non-dev environments (`stg`, `uat`, `prd`) MUST raise explicit `ValueError` if required configuration/enums are missing.
+16. **Data Freshness Completeness Guards** — In metrics/observability queries, ALWAYS enforce completeness guards (`CASE WHEN COUNT(domain_max) = {num_domains} THEN MIN(domain_max) ELSE NULL END`) and deduplicate domain input lists (`sorted(set(domains))`).
+17. **Unit Test Forwarding Preservation** — When refactoring or delegating methods in shared utilities, NEVER delete unit tests asserting argument passthrough without adding equivalent `assert_called_once_with(...)` tests.
+18. **GitHub Stacked PRs (`gh-stack`) Awareness** — Use `gh stack init`, `add`, `view`, `push`, `submit`, `sync` for dependent PR chains. Run unit tests and symbol verification on every layer in the stack.
 
 ---
 
