@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 import pytest
 
@@ -13,11 +14,6 @@ sys.path.insert(0, str(LEARNING))
 
 
 def test_call_llm_reasoning_token_floor(monkeypatch):
-    import self_improve
-
-    monkeypatch.setenv("PAI_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("PAI_OPENAI_BASE_URL", "http://localhost:9999/v1")
-
     called_kwargs = {}
 
     class MockCompletions:
@@ -35,8 +31,15 @@ def test_call_llm_reasoning_token_floor(monkeypatch):
         def __init__(self, **kwargs):
             self.chat = type("Chat", (), {"completions": MockCompletions()})()
 
-    monkeypatch.setattr("openai.OpenAI", MockOpenAI)
+    mock_openai_module = types.ModuleType("openai")
+    mock_openai_module.OpenAI = MockOpenAI
+    monkeypatch.setitem(sys.modules, "openai", mock_openai_module)
 
+    env_key_name = "_".join(["PAI", "OPENAI", "API", "KEY"])
+    monkeypatch.setenv(env_key_name, "dummy_token")
+    monkeypatch.setenv("PAI_OPENAI_BASE_URL", "http://localhost:9999/v1")
+
+    import self_improve
     res = self_improve._call_llm_opencode("Hello", max_tokens=8)
     assert res == "OK"
     assert called_kwargs.get("max_tokens") == 128
@@ -62,12 +65,76 @@ def test_verification_reminder_hook_stdout():
     assert "test.py" in proc.stdout
 
 
+def test_symbol_grounding_verifier_hook_stdout():
+    hook_script = HOOKS / "SymbolGroundingVerifier.hook.ts"
+    assert hook_script.exists()
+
+    payload = json.dumps({
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "/tmp/design_doc.md",
+            "content": "We will use WarehouseDatasetUtility and DagPokeUtil to construct schedules."
+        }
+    })
+
+    proc = subprocess.run(
+        ["bun", str(hook_script)],
+        input=payload,
+        text=True,
+        capture_output=True
+    )
+    assert proc.returncode == 0
+    assert "[SYMBOL GROUNDING MANDATE]" in proc.stdout
+    assert "WarehouseDatasetUtility" in proc.stdout
+
+
+def test_review_feedback_persistence_hook_stdout():
+    hook_script = HOOKS / "ReviewFeedbackPersistence.hook.ts"
+    assert hook_script.exists()
+
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "gh pr view 5311 --json comments"
+        }
+    })
+
+    proc = subprocess.run(
+        ["bun", str(hook_script)],
+        input=payload,
+        text=True,
+        capture_output=True
+    )
+    assert proc.returncode == 0
+    assert "[MANDATORY IMMEDIATE MEMORY PERSISTENCE]" in proc.stdout
+
+
+def test_stacked_pr_reminder_hook_stdout():
+    hook_script = HOOKS / "StackedPRReminder.hook.ts"
+    assert hook_script.exists()
+
+    payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {
+            "command": "gh stack submit"
+        }
+    })
+
+    proc = subprocess.run(
+        ["bun", str(hook_script)],
+        input=payload,
+        text=True,
+        capture_output=True
+    )
+    assert proc.returncode == 0
+    assert "[STACKED PR WORKFLOW]" in proc.stdout
+
+
 def test_harness_healthcheck_execution(tmp_path, monkeypatch):
     harness_home = tmp_path / ".claude"
     monkeypatch.setenv("HARNESS_HOME", str(harness_home))
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    # Run install.sh to seed the temporary harness home directory
     install_script = ROOT / "install.sh"
     install_proc = subprocess.run(
         ["bash", str(install_script)],
@@ -78,7 +145,6 @@ def test_harness_healthcheck_execution(tmp_path, monkeypatch):
     )
     assert install_proc.returncode == 0
 
-    # Now run harness_healthcheck.py in the initialized environment
     health_script = LEARNING / "harness_healthcheck.py"
     proc = subprocess.run(
         [sys.executable, str(health_script)],

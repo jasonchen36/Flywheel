@@ -1561,6 +1561,38 @@
       "title": "Accepting a Bot's Root-Cause Diagnosis by Symptom Match Without Independently Re-Deriving the Cause (2026-07-06)",
       "what": "**Category:** PR Review / CI Debugging / Evidence-First Verification",
       "principle": "**Category:** PR Review / CI Debugging / Evidence-First Verification"
+    },
+    {
+      "id": "P258",
+      "source_error": 258,
+      "category": "Anti-Hallucination / Symbol Grounding",
+      "title": "Hallucinating Framework Class Names or Method Signatures in Design Docs (2026-07-31)",
+      "what": "Invented WarehouseDatasetFactory class name and conflated schedule dependencies with signal emission instead of verifying source code symbols using rtk rg.",
+      "principle": "Always run symbol grounding checks (verify-doc-symbols.sh / rtk rg) against target codebases before citing framework symbols or APIs in design docs/PRs."
+    },
+    {
+      "id": "P259",
+      "source_error": 259,
+      "category": "Memory Persistence / Review Feedback",
+      "title": "Fixing Review Feedback Locally Without Immediate Persistence to Memory (2026-07-31)",
+      "what": "Fixing local code or text when review feedback is received without immediately persisting the lesson/rule to Graphiti graph memory and skill policies.",
+      "principle": "Fixing code is only half the job. Always execute mandatory immediate memory write to Graphiti and skill patch on receiving review feedback or corrections."
+    },
+    {
+      "id": "P260",
+      "source_error": 260,
+      "category": "Pre-Flight Grounding / Multi-Source Grounded Truth",
+      "title": "Reasoning from Unverified Assumptions Instead of 5 Canonical Sources (2026-07-31)",
+      "what": "Starting work without checking JIRA, AKB, Confluence, RTFM, and GitHub repos for grounded truth.",
+      "principle": "Mandatory 5-source pre-flight grounding across JIRA, AKB, Confluence, RTFM, and GitHub repos before writing code or docs."
+    },
+    {
+      "id": "P261",
+      "source_error": 261,
+      "category": "Airflow DAG / Parse-Time Safety & Completeness",
+      "title": "Hardcoding Dev Fallbacks at Parse-Time & Missing Completeness Guards (2026-07-31)",
+      "what": "Putting hardcoded parse-time dev fallbacks in production DAG files and omitting completeness guards on observability aggregations.",
+      "principle": "Raise explicit ValueError in non-dev environments for missing config, and enforce completeness guards (CASE WHEN COUNT = N THEN MIN ELSE NULL) on metrics queries."
     }
   ]
 }
