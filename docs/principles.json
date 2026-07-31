@@ -1593,6 +1593,22 @@
       "title": "Hardcoding Dev Fallbacks at Parse-Time & Missing Completeness Guards (2026-07-31)",
       "what": "Putting hardcoded parse-time dev fallbacks in production DAG files and omitting completeness guards on observability aggregations.",
       "principle": "Raise explicit ValueError in non-dev environments for missing config, and enforce completeness guards (CASE WHEN COUNT = N THEN MIN ELSE NULL) on metrics queries."
+    },
+    {
+      "id": "P262",
+      "source_error": 262,
+      "category": "Graphiti Provenance / Speaker Authority",
+      "title": "Flattening Brainstorming or Hedged Remarks into Rigid Graph Policy Edges (2026-07-31)",
+      "what": "Extracting junior engineer suggestions or hedged remarks as firm team policy without speaker provenance and confidence metadata.",
+      "principle": "Preserve speaker identity, role, and hedging levels on Graphiti memory edges ([TENTATIVE_PROPOSAL] vs [RATIFIED_DECISION])."
+    },
+    {
+      "id": "P263",
+      "source_error": 263,
+      "category": "Automation Bias / Category 3 Judgment",
+      "title": "Rubber-Stamping Flawed Category 3 Judgment Due to [VERIFIED GRAPH FACT] Badges (2026-07-31)",
+      "what": "Assuming a graph citation proves judgment correctness, causing reviewers to wave through inappropriate design decisions.",
+      "principle": "Graphiti verifies decision existence (Category 2), not judgment appropriateness (Category 3). Human reviewers must audit judgment context."
     }
   ]
 }

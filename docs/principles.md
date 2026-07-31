@@ -29,6 +29,9 @@ Pair with `memory.md` (harness logic) in this repo.
 16. **Data Freshness Completeness Guards** — In metrics/observability queries, ALWAYS enforce completeness guards (`CASE WHEN COUNT(domain_max) = {num_domains} THEN MIN(domain_max) ELSE NULL END`) and deduplicate domain input lists (`sorted(set(domains))`).
 17. **Unit Test Forwarding Preservation** — When refactoring or delegating methods in shared utilities, NEVER delete unit tests asserting argument passthrough without adding equivalent `assert_called_once_with(...)` tests.
 18. **GitHub Stacked PRs (`gh-stack`) Awareness** — Use `gh stack init`, `add`, `view`, `push`, `submit`, `sync` for dependent PR chains. Run unit tests and symbol verification on every layer in the stack.
+19. **Speaker Provenance & Edge Confidence** — Graphiti memory edges extracted from meeting transcripts MUST preserve speaker identity, role, and hedging level (`[TENTATIVE_PROPOSAL]` vs `[RATIFIED_DECISION]`). Never flatten a junior engineer's brainstorming suggestion into rigid team policy.
+20. **Human Ratification for High-Stakes Edges** — Extracted meeting decisions enter the memory graph as candidate proposals requiring explicit human ratification before serving as binding policy.
+21. **Automation Bias Guard on Graph Citations** — Stamping a claim `[VERIFIED GRAPH FACT]` proves a decision was recorded (Category 2), but does NOT prove the judgment is appropriate for the current context (Category 3). Human reviewers must audit judgment appropriateness, not rubber-stamp citations.
 
 ---
 
