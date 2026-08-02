@@ -118,7 +118,9 @@ def cmd_list(records: list[dict], today: str) -> int:
             src = rec.get("source") or "base"
             print(f"  [{rec['pattern']}] (source: {src})")
             print(f"    detected: {rec.get('detected_at')} ({age}d ago, auto-escalates in {expires_in}d)")
-            print(f"    delta: {rec.get('delta', 'n/a'):+.3f} | after_n: {rec.get('after_n', '?')} sessions")
+            d_val = rec.get("delta")
+            d_str = f"{d_val:+.3f}" if isinstance(d_val, (int, float)) else "n/a"
+            print(f"    delta: {d_str} | after_n: {rec.get('after_n', '?')} sessions")
             print(f"    obj_verdict: {rec.get('obj_verdict', '?')} | judge_verdict: {rec.get('judge_verdict', '?')}")
             if sc:
                 print(f"    current_scores: subj={sc.get('verdict')} obj={sc.get('obj_verdict')} jdg={sc.get('judge_verdict')}")

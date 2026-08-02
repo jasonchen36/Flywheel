@@ -6,6 +6,7 @@
  * parseTranscriptFromInput() if it needs the full transcript.
  */
 
+import { existsSync } from 'fs';
 import { parseTranscript, type ParsedTranscript } from '../../PAI/Tools/TranscriptParser';
 
 export interface HookInput {
@@ -54,5 +55,8 @@ export async function readHookInput(): Promise<HookInput | null> {
  */
 export async function parseTranscriptFromInput(input: HookInput): Promise<ParsedTranscript> {
   await new Promise(resolve => setTimeout(resolve, 150));
+  if (!input?.transcript_path || !existsSync(input.transcript_path)) {
+    return { messages: [], lastMessage: '' } as any;
+  }
   return parseTranscript(input.transcript_path);
 }
