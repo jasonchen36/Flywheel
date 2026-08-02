@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""meeting_summary_ingest.py — continuous tribal knowledge into Graphiti.
+"""scrum_graphiti_ingest.py — continuous tribal knowledge: new scrum summaries → Graphiti.
 
-Watches $HARNESS_MEETING_DIR (default ~/.claude/meeting-summaries) for
-*.summary.md files, queues high-signal content into graphiti_pending_episodes.jsonl,
-optionally flushes via flush_graphiti_pending.py.
+Watches ~/.claude/scrum-recordings/*.txt.summary.md, queues high-signal files
+not yet in graphiti_flushed_archive.jsonl, then optionally flushes.
 
 Usage:
-  pyenv exec python3 meeting_summary_ingest.py --once --flush --limit 15
+  pyenv exec python3 scrum_graphiti_ingest.py --once
+  pyenv exec python3 scrum_graphiti_ingest.py --once --flush
+  pyenv exec python3 scrum_graphiti_ingest.py --once --flush --limit 15
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
@@ -21,13 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HOME = Path.home()
-HARNESS = Path(os.environ.get("HARNESS_HOME", HOME / ".claude"))
-REC = Path(os.environ.get("HARNESS_MEETING_DIR", HARNESS / "meeting-summaries"))
-STATE = HARNESS / "MEMORY" / "STATE"
+REC = HOME / ".claude/scrum-recordings"
+STATE = HOME / ".claude/MEMORY/STATE"
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 ARCHIVE = STATE / "graphiti_flushed_archive.jsonl"
-LEDGER = STATE / "meeting_graphiti_ingest_ledger.json"
-LEARNING = HARNESS / "MEMORY" / "LEARNING"
+LEDGER = STATE / "scrum_graphiti_ingest_ledger.json"
+LEARNING = HOME / ".claude/MEMORY/LEARNING"
 MIN_BYTES = 900
 
 
@@ -71,8 +70,8 @@ def high_signal(path: Path, text: str) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--once", action="store_true")
-    ap.add_argument("--flush", action="store_true")
+    ap.add_argument("--once", action="store_true", help="scan once and queue new")
+    ap.add_argument("--flush", action="store_true", help="run flush_graphiti_pending after queue")
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -83,21 +82,18 @@ def main() -> int:
     ingested = ledger.setdefault("ingested", {})
     already = flushed_names() | set(ingested.keys())
     queued = []
-    if not REC.exists():
-        print(json.dumps({"ts": now_iso(), "error": f"missing {REC}", "candidates_queued": 0}))
-        return 0
-    for path in sorted(REC.glob("*.summary.md")):
+    for path in sorted(REC.glob("*_scrum.txt.summary.md")):
         text = path.read_text(errors="replace")
         if not high_signal(path, text):
             continue
-        stem = path.name.replace(".summary.md", "")
-        name = f"meeting-summary-{stem}"
+        stem = path.name.replace(".txt.summary.md", "")
+        name = f"scrum-summary-{stem}"
         h = hashlib.sha256(text.encode()).hexdigest()[:16]
         key = f"{name}:{h}"
         if name in already or key in ingested:
             continue
         body = (
-            f"Meeting transcript extract (tribal knowledge & team context).\n"
+            f"Scrum transcript extract (tribal knowledge & team context).\n"
             f"File: {path}\n"
             f"PROVENANCE & HEDGING DIRECTIVE:\n"
             f"- Preserve speaker identity, role, and authority.\n"
@@ -111,8 +107,8 @@ def main() -> int:
             "name": name,
             "episode_body": body,
             "source": "text",
-            "source_description": "meeting_summary_ingest continuous",
-            "group_id": os.environ.get("GRAPHITI_GROUP_ID", "main"),
+            "source_description": "scrum_graphiti_ingest continuous",
+            "group_id": "main",
             "status": "pending",
         }
         queued.append((key, name, row))
@@ -123,6 +119,7 @@ def main() -> int:
     if args.dry_run:
         print(json.dumps(report, indent=2))
         return 0
+
     if queued:
         STATE.mkdir(parents=True, exist_ok=True)
         with PENDING.open("a") as f:
@@ -131,16 +128,19 @@ def main() -> int:
                 ingested[key] = {"name": name, "ts": now_iso()}
         LEDGER.write_text(json.dumps(ledger, indent=2))
     print(json.dumps(report, indent=2))
+
     if args.flush and queued:
         cmd = [
-            sys.executable,
+            "pyenv",
+            "exec",
+            "python3",
             str(LEARNING / "flush_graphiti_pending.py"),
             "--limit",
             str(max(args.limit, 50)),
         ]
         r = subprocess.run(cmd, cwd=str(LEARNING), capture_output=True, text=True)
         print(r.stdout)
-        if r.returncode != 0:
+        if r.returncode not in (0,):
             print(r.stderr, file=sys.stderr)
             return r.returncode
     return 0

@@ -57,7 +57,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from self_improve import call_llm, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
+from self_improve import call_llm, _apply_pai_settings_env, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
+_apply_pai_settings_env()
 
 STATE_DIR = Path.home() / ".claude/MEMORY/STATE"
 SCORES_JSON = STATE_DIR / "effectiveness_scores.json"
@@ -141,7 +142,9 @@ def generate_variants(pattern: str, failing_rule: str, n: int) -> list[str]:
         f"added. Propose {n} DIFFERENT candidate instructions, each taking a genuinely "
         f"different angle than the one above (e.g. different trigger condition, a concrete "
         f"checklist instead of a general principle, a specific tool/command to run, an "
-        f"explicit consequence, or reframing what to do instead of what to avoid). Do NOT "
+        f"explicit consequence, or reframing what to do instead of what to avoid).\n"
+        f"Each candidate MUST include explicit RATIONALE and APPLICABILITY BOUNDS so the assistant understands "
+        f"WHY the rule exists and WHEN it applies (e.g. 'Rule: ... | Rationale: ... | Applicability: ...'). Do NOT "
         f"just reword the same instruction.\n\n"
         f"Reply with exactly {n} lines, one candidate instruction per line, no numbering, "
         f"no preamble, no markdown."
