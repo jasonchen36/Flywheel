@@ -29,6 +29,11 @@ Pair with `memory.md` (harness logic) in this repo.
 16. **Data Freshness Completeness Guards** — In metrics/observability queries, ALWAYS enforce completeness guards (`CASE WHEN COUNT(domain_max) = {num_domains} THEN MIN(domain_max) ELSE NULL END`) and deduplicate domain input lists (`sorted(set(domains))`).
 17. **Unit Test Forwarding Preservation** — When refactoring or delegating methods in shared utilities, NEVER delete unit tests asserting argument passthrough without adding equivalent `assert_called_once_with(...)` tests.
 18. **GitHub Stacked PRs (`gh-stack`) Awareness** — Use `gh stack init`, `add`, `view`, `push`, `submit`, `sync` for dependent PR chains. Run unit tests and symbol verification on every layer in the stack.
+19. **Precondition Enumeration over Generic Deliberation** — Structure beats raw information by 2.83x. BEFORE executing tasks or proposing actions, explicitly enumerate all physical and logical preconditions that MUST be true for the goal to succeed.
+20. **Deterministic Controls Over Probabilistic Guardrails** — Never rely solely on prose instructions for safety or blast radius limits. Mutating/destructive operations MUST be wrapped in deterministic tool wrappers, code checks, and permission gates that hold regardless of LLM attention weights.
+21. **Independent Observer Verification** — Self-audit in the same generating model shares the same blind spots. Verification loops and Stop hooks MUST use independent, specialized tools (linters, AST checks, schema validators, regex detectors) to audit outputs before commitment.
+22. **Flywheel Brake & Artifact Lifecycle** — Classify learned artifacts as `compensation` (provisional model workaround), `boundary` (permanent safety/governance limit), or `context` (durable domain facts). Revalidate compensation rules upon model upgrades; retire unearned rules via counterfactual NullMemory testing.
+23. **$pass^k$ Reliability Benchmark Metric** — Evaluate multi-step agent workflows using $pass^k$ (all $k$ attempts succeed) rather than $pass@k$ (at least 1 succeeds) to expose run-to-run stochasticity.
 
 ---
 
