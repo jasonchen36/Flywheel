@@ -39,6 +39,8 @@ pyenv exec python3 ace_playbook.py --dry-run
 pyenv exec python3 review_queue.py --stats
 pyenv exec python3 skill_autofix.py --status
 pyenv exec python3 flush_graphiti_pending.py --dry-run
+pyenv exec python3 harness_changelog.py          # visible digest of harness mutations since last run (DoorDash Flux lesson: make the work visible)
+pyenv exec python3 surface_gate.py --help        # deterministic pre-apply surface check against editable_surfaces.json (Flux gateway lesson)
 ```
 
 3. Summarize: healthcheck OK, fixture D_in/D_out, agent_rollouts pass_rate, skill_autofix,

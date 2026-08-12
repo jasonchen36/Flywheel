@@ -148,20 +148,47 @@ def validate_skill_content(text: str) -> bool:
     if start_count != 1 or end_count != 1:
         print(f"[validation-error] Invalid marker count. Start markers: {start_count}, End markers: {end_count}")
         return False
-    
+
     # 2. Check that start comes before end
     start_idx = text.find(START)
     end_idx = text.find(END)
     if start_idx >= end_idx:
         print("[validation-error] Start marker must precede end marker.")
         return False
-    
+
     # 3. Check for balanced backticks/code fences
     fence_count = text.count("```")
     if fence_count % 2 != 0:
         print(f"[validation-error] Unbalanced backticks/code fences (count: {fence_count})")
         return False
-        
+
+
+def parse_validation_contract(block: str) -> str | None:
+    """A generated guardrail may opt into a deterministic validation contract:
+    a line of the form `-- @validation: <shell command>` inside the block. The
+    command must exit 0 against the edited skill file before the edit is kept
+    (Flux lesson: playbooks declare validation, not just intent). Returns the
+    command, or None when the proposal carries no contract (behavior unchanged).
+    """
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("-- @validation:"):
+            cmd = stripped.split(":", 1)[1].strip()
+            return cmd or None
+    return None
+
+
+def run_validation(cmd: str, cwd: Path, timeout: int = 90) -> tuple[bool, str]:
+    """Run a declared validation command; returns (ok, tail_of_output)."""
+    try:
+        r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True,
+                           text=True, timeout=timeout)
+        out = (r.stdout or "") + (r.stderr or "")
+        return r.returncode == 0, out.strip()[-500:]
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return False, str(e)[:500]
+
+
     return True
 
 
@@ -420,18 +447,36 @@ def propose_new(ledger: dict, entries: list, today: str, changes: list[str],
         if not block:
             changes.append(f"deferred /{skill} — LLM unavailable; retry next session")
             continue
+        validation_cmd = parse_validation_contract(block)
+        expected_outcome = f"fix '{pattern}' on /{skill} (baseline fail rate {rate:.2f}, n={low_n})"
         commit_before = snapshot(skill, live, f"before autofix /{skill} ({pattern})", surface=surface)
         new_content = upsert_section(live.read_text(), block)
         if validate_skill_content(new_content):
             live.write_text(new_content)
             commit_after = snapshot(skill, live, f"autofix /{skill} ({pattern})", surface=surface)
+            ok, validation_note = True, ""
+            if validation_cmd:
+                ok, validation_note = run_validation(validation_cmd, live.parent)
+                if not ok:
+                    # Contract not met → revert the edit, keep the record for audit.
+                    prior = content_at(skill, commit_before, surface=surface)
+                    if prior is not None:
+                        live.write_text(prior)
+                    commit_after = snapshot(skill, live, f"revert /{skill} ({pattern}) validation-failed", surface=surface)
             ledger["edits"].append({
                 "skill": skill, "pattern": pattern, "surface": surface,
                 "baseline_fail_rate": round(rate, 3), "baseline_n": len(sessions),
+                "expected_outcome": expected_outcome,
+                "validation": f"pass: {validation_note[:200]}" if (validation_cmd and ok) else (
+                    f"fail: {validation_note[:200]}" if (validation_cmd and not ok) else None),
                 "commit_before": commit_before, "commit_after": commit_after,
-                "applied": today, "status": "active", "post_n": 0,
+                "applied": today, "status": "active" if (not validation_cmd or ok) else "validation-failed",
+                "post_n": 0,
             })
-            changes.append(f"APPLIED /{skill} [{surface}] — guardrail for '{pattern}' (baseline {rate:.2f}, n={low_n})")
+            if validation_cmd and not ok:
+                changes.append(f"REVERTED /{skill} [{surface}] — validation contract failed: {validation_note[:200]}")
+            else:
+                changes.append(f"APPLIED /{skill} [{surface}] — guardrail for '{pattern}' (baseline {rate:.2f}, n={low_n})")
         else:
             changes.append(f"deferred /{skill} — generated content failed format validation")
     return candidates
