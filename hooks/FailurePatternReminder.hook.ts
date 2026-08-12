@@ -17,7 +17,7 @@
  * PERFORMANCE: <30ms (filesystem reads only, no inference)
  */
 
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
 const PAI_DIR = process.env.PAI_DIR || join(process.env.HOME!, '.claude');
@@ -222,9 +222,87 @@ async function main() {
     await Promise.race([read, timeout]);
   } catch {}
 
+  // Parse the hook payload; branch on event type.
+  let payload: any = null;
+  try { payload = JSON.parse(_input); } catch {}
+
+  const hookEventName = payload?.hook_event_name || '';
+
+  // ── Stop-time lightweight reminder ──────────────────────────────────────
+  // The UserPromptSubmit reminder below fires at the START of the next turn
+  // — a turn late. On Stop we can only inject feedback by returning
+  // `decision: block` (Stop hooks can't append post-stop context). To stay
+  // lightweight and avoid double-firing with EnforcementGate (which owns the
+  // `block` mode), we fire a compact block ONLY when unverified_completion
+  // is NOT in block mode — i.e. when EnforcementGate won't catch it.
+  if (hookEventName === 'Stop') {
+    // Skip if EnforcementGate already owns block mode for this pattern.
+    try {
+      const cfg = JSON.parse(readFileSync(join(PAI_DIR, 'MEMORY', 'STATE', 'enforcement_config.json'), 'utf-8'));
+      const override = cfg.overrides?.['unverified_completion'];
+      if (override === 'block') process.exit(0); // EnforcementGate handles it
+      if (process.env.ENFORCEMENT_OFF === '1') process.exit(0);
+      if (cfg.enabled === false) process.exit(0);
+    } catch {}
+
+    // Capture the assistant's last message (same shape as StopHooks/EnforcementGate).
+    let resp = payload?.last_assistant_message || '';
+    if (!resp && payload?.transcript_path) {
+      try {
+        const { parseTranscript } = await import('../../PAI/Tools/TranscriptParser');
+        const parsed = await parseTranscript(payload.transcript_path);
+        resp = (parsed as any).lastMessage || '';
+      } catch {}
+    }
+    resp = (resp || '').trim();
+    if (!resp) process.exit(0);
+
+    // Lightweight detector: completion claim without STRONG paper trace.
+    const COMPLETION_CLAIM = /\b(done|complete|completed|fixed|merged|posted|deployed|shipped|finished|approved)\b|\b(picture is complete|full picture|work is complete|everything is complete|analysis is complete|should be complete|marked (as )?complete)\b/i;
+    const hasStrongArtifact = (r: string): boolean => {
+      if (r.includes('```') && r.split('```').length >= 3) return true;
+      if (/https?:\/\/\S+/.test(r)) return true;
+      if (/\bEXIT[: ]\s*\d|\bexit code\s*[=:]?\s*\d/i.test(r)) return true;
+      if (/\b\d+\s+(passed|failed)\b/i.test(r) && /\b(pytest|jest|mocha|unittest|go test|tests?\b|rtk |\$ )/i.test(r)) return true;
+      if (/\b(verified (via|with|by)|proof:|evidence:|dry[- ]?run|bq query|pytest|rtk |\$ )\b/i.test(r) && (/\b(output|stdout|result|shows?|passed|failed|exit)\b/i.test(r) || r.includes('```'))) return true;
+      return false;
+    };
+
+    if (COMPLETION_CLAIM.test(resp) && !hasStrongArtifact(resp)) {
+      process.stdout.write(JSON.stringify({
+        decision: 'block',
+        reason: '⚠️ Completion claimed without STRONG paper trace. Fence the CLI/test output + tool name, exit code, pass count, or a live URL that proves it — or revise the claim to what is still unverified. (Stop-time reminder)',
+      }));
+    }
+    process.exit(0);
+  }
+
+  // ── UserPromptSubmit (original behavior) ────────────────────────────────
   // Extract the user's prompt from the hook payload for relevance matching.
   let prompt = '';
-  try { prompt = (JSON.parse(_input).prompt || '').toString(); } catch {}
+  try { prompt = (payload?.prompt || '').toString(); } catch {}
+
+  // ── Loop guards (2026-08-12) ────────────────────────────────────────────
+  // Observed failure: the harness fed this hook's own injected context back as
+  // the next UserPromptSubmit prompt, so the reminder re-injected on every turn
+  // with no user input, infinitely. Three guards break that:
+  //   1) Empty/whitespace prompt: nothing to match, nothing to inject.
+  //   2) Self-reference: if the prompt IS this hook's own reminder header,
+  //      exit without injecting (injection → prompt → injection loop).
+  //   3) Cooldown: bound injection rate so any retry loop can't hammer turns.
+  const SELF_MARKER = 'FAILURE PATTERN REMINDER';
+  const COOLDOWN_MS = 30_000;
+  const LAST_INJECTED = join(PAI_DIR, 'MEMORY', 'STATE', 'failure_reminder_last_injected');
+  if (!prompt.trim()) process.exit(0);
+  if (prompt.includes(SELF_MARKER)) process.exit(0);
+  try {
+    const now = Date.now();
+    if (existsSync(LAST_INJECTED)) {
+      const last = parseInt(readFileSync(LAST_INJECTED, 'utf-8'), 10) || 0;
+      if (now - last < COOLDOWN_MS) process.exit(0);
+    }
+    writeFileSync(LAST_INJECTED, String(now));
+  } catch {}
 
   // Relevance layer: lessons whose keywords match THIS task, re-ranked by
   // effectiveness (still-failing patterns boosted, resolved ones suppressed).
