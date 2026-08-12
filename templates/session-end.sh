@@ -56,4 +56,20 @@ fi
   || true
 ) >> /tmp/self-improve.log 2>&1 &
 
+# DoorDash Flux lessons (2026-08-11): make the work visible + keep the gate
+# deterministic. Independent, non-blocking background job (never fails the loop).
+(
+  cd "$LEARNING" \
+    && $PY harness_changelog.py > /tmp/harness_changelog.log 2>&1 \
+    && ($PY surface_gate.py "$HARNESS_HOME/hooks/claude-session-end" \
+         > /tmp/surface_gate_selftest.log 2>&1; \
+        rc=$?; \
+        if [ "$rc" = "1" ]; then \
+          echo "[surface_gate] enforcement OK - hooks path denied" >> /tmp/surface_gate_selftest.log; \
+        else \
+          echo "[surface_gate] WARN: expected deny (exit 1) for hooks path, got exit $rc" >> /tmp/surface_gate_selftest.log; \
+        fi; true) \
+    || true
+) >> /tmp/harness_changelog.log 2>&1 &
+
 exit 0
