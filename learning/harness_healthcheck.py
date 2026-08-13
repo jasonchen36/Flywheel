@@ -168,7 +168,9 @@ def main() -> int:
         "newest_rating": newest_rating,
         "rating_age_days": rating_age_days,
     }
-    if rating_age_days is None:
+    if n_ratings == 0:
+        report["checks"]["signal_freshness"]["status"] = "no_ratings_yet"
+    elif rating_age_days is None:
         report["errors"].append(
             "no parseable rating timestamps — capture sensor is dark"
         )
