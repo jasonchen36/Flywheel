@@ -140,6 +140,51 @@ def main() -> int:
             "— everything dumping into general-session; path/Skill attribution broken"
         )
 
+    # Signal freshness — when ratings stop flowing, every downstream verdict
+    # (measure_effectiveness, burn-in, ACE) runs on stale data while the loop
+    # still reports green. 2026-08-12: PAI_HAIKU_BACKGROUND_DISABLED=1 killed
+    # sentiment capture for 27d and healthcheck said OK — never again.
+    newest_rating = None
+    if Path(RATINGS_FILE).exists():
+        for line in Path(RATINGS_FILE).read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                ts = json.loads(line).get("timestamp")
+            except json.JSONDecodeError:
+                continue
+            if ts and (newest_rating is None or str(ts) > newest_rating):
+                newest_rating = str(ts)
+    rating_age_days = None
+    if newest_rating:
+        try:
+            dt = datetime.fromisoformat(newest_rating.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            rating_age_days = (datetime.now(timezone.utc) - dt).days
+        except ValueError:
+            pass
+    report["checks"]["signal_freshness"] = {
+        "newest_rating": newest_rating,
+        "rating_age_days": rating_age_days,
+    }
+    if rating_age_days is None:
+        report["errors"].append(
+            "no parseable rating timestamps — capture sensor is dark"
+        )
+        report["ok"] = False
+    elif rating_age_days > 5:
+        report["errors"].append(
+            f"RATINGS FLATLINE: newest rating is {rating_age_days}d old — "
+            "verdicts, escalation and burn-in are spinning on stale data; "
+            "check RatingCapture hook + PAI_*_DISABLED flags"
+        )
+        report["ok"] = False
+    elif rating_age_days > 2:
+        report["warnings"].append(
+            f"newest rating is {rating_age_days}d old — capture may be degraded"
+        )
+
     # Graph
     pending = STATE / "graphiti_pending_episodes.jsonl"
     archive = STATE / "graphiti_flushed_archive.jsonl"
@@ -236,6 +281,26 @@ def main() -> int:
         ),
         "total_edits": len(led.get("edits", [])),
     }
+    # Burn-in stall: active edits that can never complete measurement because
+    # no post-apply traffic exists for the skill (or the sensor is dark).
+    today = datetime.now(timezone.utc).date()
+    stalled = []
+    for e in led.get("edits", []):
+        if e.get("status") != "active":
+            continue
+        try:
+            applied = datetime.strptime(str(e.get("applied", ""))[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        age = (today - applied).days
+        if age > 14 and not e.get("post_n"):
+            stalled.append(f"/{e.get('skill')}:{e.get('pattern')} ({age}d)")
+    report["checks"]["skill_autofix"]["burnin_stalled"] = stalled
+    if stalled:
+        report["warnings"].append(
+            f"burn-in stalled {len(stalled)} edits (age>14d, post_n=0): {stalled} "
+            "— run skill_burnin.py --resolve-stall --apply"
+        )
 
     # Gates last run
     suite = load_json(STATE / "held_out_suite_last.json") or {}
@@ -271,6 +336,7 @@ def main() -> int:
         print(f"\nEffectiveness: {report['checks']['effectiveness']}")
         print(f"Lessons: {report['checks']['lessons']}")
         print(f"Ratings: {report['checks']['ratings']}")
+        print(f"Signal freshness: {report['checks']['signal_freshness']}")
         print(f"Graph: {report['checks']['graph']}")
         print(f"Enforcement: {report['checks']['enforcement']}")
         print(f"skill_autofix: {report['checks']['skill_autofix']}")
