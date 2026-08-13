@@ -10,19 +10,25 @@ This harness **is** a self-improving agent — with bounded, local mutations.
 It does **not** retrain model weights. It mutates lessons, skill guardrails,
 taxonomy, enforcement config, and an ACE playbook from failure signals.
 
-### Agent parity (Claude / Grok / pi)
+### Agent parity (Claude / Grok / pi / Codex)
 
-| Surface | Claude | Grok | pi |
-|---|---|---|---|
-| Shared MEMORY + ratings.jsonl | yes | yes | yes (`agent:"pi"`) |
-| SessionEnd loop (`claude-session-end`) | settings hooks | `[compat.claude] hooks` | `claude-bridge.ts` → SessionEnd |
-| FailurePatternReminder + ACE every turn | `FailurePatternReminder.hook.ts` | via hooks compat | `pai-learning-harness.ts` |
-| EnforcementGate (block) | Stop hook | via hooks compat | `pai-enforcement-gate.ts` → `sendUserMessage` follow-up |
-| skill_autofix | `~/.claude/commands/*.md` | same | + `~/.pi/agent/skills/**` |
-| Status skill | Grok `/self-improve` | same | pi `/self-improve` + skill |
+| Surface | Claude | Grok | pi | Codex |
+|---|---|---|---|---|
+| Shared MEMORY + ratings.jsonl | yes | yes | yes (`agent:"pi"`) | yes (`agent:"codex"`) |
+| SessionEnd loop (`claude-session-end`) | settings hooks | `[compat.claude] hooks` | `claude-bridge.ts` → SessionEnd | **`codex-harness` EXIT** (no native SessionEnd) |
+| FailurePatternReminder + ACE every turn | `FailurePatternReminder.hook.ts` | via hooks compat | `pai-learning-harness.ts` | `~/.codex/hooks/pai_user_prompt_submit.py` |
+| EnforcementGate (block) | Stop hook | via hooks compat | `pai-enforcement-gate.ts` → follow-up | `pai_stop_enforcement.py` (Stop `decision:block`) |
+| skill_autofix | `~/.claude/commands/*.md` | same | + `~/.pi/agent/skills/**` | + `~/.codex/skills/**` |
+| Status skill | Grok `/self-improve` | same | pi `/self-improve` | `~/.codex/skills/self-improve` |
 
 Pi extensions (auto-discovered): `~/.pi/agent/extensions/pai-learning-harness.ts`,
 `pai-enforcement-gate.ts`, `claude-bridge.ts`.
+
+Pi ↔ Grok Build runtime parity: `~/.pi/agent/PARITY.md` (status) +
+`~/.pi/agent/ROADMAP.md` (phased plan: plan mode, subagents, worktrees, arena).
+
+Codex surfaces: `~/.codex/hooks/pai_*.py`, `~/.codex/bin/codex-harness`,
+`~/.codex/PARITY.md`. Launch via wrapper for SessionEnd; trust new hooks in `/hooks`.
 
 ## Lil'Log → this harness map
 
@@ -54,6 +60,24 @@ Pi extensions (auto-discovered): `~/.pi/agent/extensions/pai-learning-harness.ts
 | 5 | Expanded held-out / rollouts | `held_out_suite/fixtures/*` data_platform + tool_misuse |
 | 6 | Intent vs HOW audit | `intent_how_audit.py` |
 | 7 | Retrieval SOP | `MEMORY/STATE/retrieval_sop.md` + graph_preflight + FailurePatternReminder |
+
+## Harness upgrades (2026-07-16) — integrity + anti-recidivism
+
+| # | Bug / gap | Fix |
+|---|---|---|
+| 1 | `promote_to_taxonomy` substring-matched `PR_PATTERN_KEYWORDS` first → pollution (`"other": ["other"]` ×N) | Line-anchored `^PATTERN_KEYWORDS` + idempotent skip if pattern exists |
+| 2 | Auto-drain re-promoted denylist labels (`other`, `not_a_failure`, …) | `PROMOTE_DENYLIST` + ledger `rejected_denylist` + refuse on approve |
+| 3 | `lesson_dedup` `already_queued` never matched (`survivor` vs `survivor<-loser`) → 37× re-approve | Key by full pattern + include approved + skip missing files |
+| 4 | Merge approve thrash when loser already deleted | Idempotent merge path + audit `lesson-merged-idempotent` |
+| 5 | Healthcheck blind to taxonomy pollution / review thrash | `taxonomy_integrity` + `review_recidivism` checks |
+
+## Harness upgrades (2026-07-17) — skill attribution + lesson collapse
+
+| # | Bug / gap | Fix |
+|---|---|---|
+| 1 | 99% ratings skill=`general-session` → skill_autofix never qualifies real skills | `ratings_hygiene.py --reattribute` backfills from summary/preview text; RatingCapture text+path harvest at write |
+| 2 | 99/114 lessons were template stubs; name Jaccard used STOPWORDS that strip `check` → 0 merge candidates | `name_tokens()` + template bar = threshold; `SEMANTIC_CLUSTERS`; `--apply-now` one-shot drain |
+| 3 | 114 near-dupe autogen lessons | Drained **114 → 41** (73 merges); backups under `STATE/lesson_dedup_backups/` |
 
 ## Loop (every SessionEnd)
 
@@ -142,7 +166,10 @@ Anti-hallucination stack (2026-07-09 → 09b):
 | Store | Role | Path / group |
 |---|---|---|
 | **graphiti-memory** | Durable work + architecture (Neo4j) | group_id=`main` |
-| **bungraph** | Local hybrid search + harness loopback | `~/.bungraph.db` (MCP) |
+| **bungraph** | Local hybrid search + harness loopback | **`~/.bungraph.db` only** (CLI must pass `--db`; env alone ignored) |
+
+
+**Canonical bungraph path (2026-07-17):** only `~/.bungraph.db`. CLI ignores `BUNGRAPH_DB_PATH` (defaults to `./bungraph.db`). cwd-scattered DBs were consolidated + quarantined under `STATE/bungraph_quarantine_*` (~11GB LEARNING bloat + session notes).
 
 SessionEnd runs `session_graphiti_autoseed.py` (durable transcript → pending),
 then `sync_graph_memory.py` (which also calls `flush_graphiti_pending.py`) after
@@ -160,6 +187,14 @@ pai-learning-harness (pi). FailurePatternReminder also injects graph preflight
 every UserPromptSubmit. Agents must search graphiti/bungraph **before** broad
 research — `graphiti_bypassed` is **block** when ≥2 research tools fire without
 a graphiti-memory or bungraph call.
+
+## Harness upgrades (2026-08-13) — freshness, burn-in stall, chronic recidivism
+
+| # | Bug / gap | Fix |
+|---|---|---|
+| 1 | Capture sensor flatline silent in healthcheck | `harness_healthcheck.py` checks `rating_age_days > 5` (error) / `> 2` (warn) |
+| 2 | Active skill_autofix edits sat 28d with `post_n=0` | `skill_burnin.py --resolve-stall --apply` parks unmeasurable edits; auto-reactivates on new traffic |
+| 3 | Ladder-top patterns queued human review indefinitely | `chronic_failures.py` detects regressed+blocked patterns (audit >= 5) and emits intervention-class rotation report |
 
 ## Operator controls
 
@@ -197,3 +232,34 @@ Autonomous harness self-improvement = closed loop on **machinery**, not weights:
 5. ACE playbook curated as itemized bullets for next-session injection
 6. Flat/regressed → evolve or escalate; skill concentration → autofix with revert
 7. Human only for policy conflicts and noise rejection
+
+
+## Grok accuracy package (2026-07-17)
+
+| # | Change |
+|---|---|
+| 1 | `unverified_claims` + `claim_evidence` → **block** |
+| 2 | `tool_misuse` ACE+lesson reinforced; escalate still active until re-measure |
+| 3 | Guardrails SSOT `~/.claude/commands` (Grok via compat); optional pi/agents mirror |
+| 4 | FailurePatternReminder: hard floor 4 patterns + domain playbook inject |
+| 5–7 | held_out fixtures expanded (tool_misuse, claims, incomplete_analysis) |
+| 8 | RESEARCH_TOOL_RE expanded for Grok tools; graph_preflight refreshed |
+| 9 | Background LLM probe (DeepSeek primary / Gemini fallback) |
+| 10 | `agent_effectiveness.py` per-agent report |
+| 11 | review_queue compact (last approval per pattern+source) |
+| 12 | `skill_autofix_burnin.md` measure-after checklist |
+
+
+## Phases A–D further improvement (2026-07-17)
+
+See `DIAGNOSTICS/phases_ABCD_2026-07-17.md` and `self_harness_status.py`.
+
+
+## Phases E–I (2026-07-17)
+
+See `DIAGNOSTICS/phases_EFGHI_2026-07-17.md`.
+
+
+## Phases J–O (2026-07-17)
+
+See `DIAGNOSTICS/phases_JKLMNO_2026-07-17.md`.
