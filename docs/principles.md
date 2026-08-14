@@ -782,6 +782,16 @@ Pair with `memory.md` (harness logic) in this repo.
 - **P148** Treating Batch or Bronze-Only Dataflow Evidence as Enough for a Requested Streaming Validation (2026-04-08)
   - _**Category:** Testing / streaming-pipeline / Dataflow / Evidence Scoping_
 
+### Go Microservices / Scaffolding / CI/CD Scope Discipline
+
+- **P262** Microservice Scaffolding Scope Creep, Incorrect Teams Channels, and Active Deploy on Unregistered Repo (2026-08-13)
+  - _Keep repo scaffolding PRs strictly scoped to framework setup (cmd/app/grpc, Dockerfile, doit.sh, CI). Route MS Teams notifications to Data Architecture channels (Data Architecture - Non-PRD/UAT/PRD) under team 'BE - Notifications'. Default enable_deployment to false in new service deploy.yml until ArgoCD registration lands._
+
+### Git Workflow / Pre-Push Gates / Process Safety
+
+- **P263** Bypassing Pre-Push No-Mistakes Gate on Feature Branch via `--no-verify` (2026-08-13)
+  - _Never use `--no-verify` to bypass local pre-push validation on feature branches. Always execute `no-mistakes axi run --intent "..."` or `no-mistakes push` prior to pushing._
+
 ### Testing / streaming-pipeline / Evidence Methodology
 
 - **P127** Synthetic AVRO DELETE Pattern — Building PR-Branch Evidence Without a Real MySQL Delete (2026-03-17)

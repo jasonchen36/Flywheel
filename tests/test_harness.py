@@ -130,6 +130,59 @@ def test_stacked_pr_reminder_hook_stdout():
     assert "[STACKED PR WORKFLOW]" in proc.stdout
 
 
+def test_no_mistakes_gate_hook():
+    hook_script = HOOKS / "NoMistakesGate.hook.sh"
+    assert hook_script.exists()
+
+    # Blocked feature branch push
+    blocked_payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "rtk git push origin feat/my-branch"}
+    })
+    proc = subprocess.run(["bash", str(hook_script)], input=blocked_payload, text=True, capture_output=True)
+    assert proc.returncode == 2
+    res = json.loads(proc.stdout)
+    assert res.get("decision") == "deny"
+    assert res.get("continue") is False
+
+    # Allowed promotion push
+    allowed_payload = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "rtk git push origin prd"}
+    })
+    proc = subprocess.run(["bash", str(hook_script)], input=allowed_payload, text=True, capture_output=True)
+    assert proc.returncode == 0
+
+
+def test_workflow_guard_hook():
+    hook_script = HOOKS / "WorkflowGuard.hook.sh"
+    assert hook_script.exists()
+
+    # Blocked invalid teams channel
+    blocked_payload = json.dumps({
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": ".github/workflows/deploy.yml",
+            "content": "notify_teams_channel: AXP+-+bigbrother+-+nonprd"
+        }
+    })
+    proc = subprocess.run(["bash", str(hook_script)], input=blocked_payload, text=True, capture_output=True)
+    assert proc.returncode == 2
+    res = json.loads(proc.stdout)
+    assert res.get("decision") == "deny"
+
+    # Allowed valid channel
+    allowed_payload = json.dumps({
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": ".github/workflows/deploy.yml",
+            "content": "notify_teams_channel: Data+Architecture+-+Non-PRD"
+        }
+    })
+    proc = subprocess.run(["bash", str(hook_script)], input=allowed_payload, text=True, capture_output=True)
+    assert proc.returncode == 0
+
+
 def test_harness_healthcheck_execution(tmp_path, monkeypatch):
     harness_home = tmp_path / ".claude"
     monkeypatch.setenv("HARNESS_HOME", str(harness_home))
