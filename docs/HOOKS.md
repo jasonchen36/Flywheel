@@ -6,6 +6,9 @@
 | `FailurePatternReminder.hook.ts` | UserPromptSubmit | ACE bullets + graph preflight |
 | `VerificationReminder.hook.ts` | PostToolUse Write/Edit | Enforce live test verification before completion |
 | `PRDescriptionReminder.hook.ts` | PostToolUse Bash (git push) | Remind agent to update GitHub PR body after push |
+| `NoMistakesGate.hook.sh` | PreToolUse Bash (git push) | Block direct feature pushes without `/no-mistakes` validation |
+| `PRApprovalRateLimit.hook.sh` | PreToolUse Bash (pr review) | Rate-limit consecutive PR approvals (10s threshold) |
+| `WorkflowGuard.hook.sh` | PreToolUse Write/Edit | Linter for CI workflow notification channels and deploy dormancy |
 | `EnforcementGate.hook.ts` | Stop | block/warn completion & claim failures |
 | `SecurityValidator.hook.ts` | PreToolUse Bash/Edit/Write | blast-radius patterns |
 | `EpistemicRules.hook.ts` | UserPromptSubmit | confidence tags |
