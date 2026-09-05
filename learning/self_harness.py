@@ -34,6 +34,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import append_jsonl, atomic_write_text
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -58,12 +59,6 @@ def load_surfaces() -> dict:
     if not SURFACES.exists():
         return {"allow": [], "deny": []}
     return json.loads(SURFACES.read_text())
-
-
-def append_jsonl(path: Path, rec: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a") as f:
-        f.write(json.dumps(rec) + "\n")
 
 
 # ── Stage 1: Weakness mining ──────────────────────────────────────────────────
@@ -386,10 +381,9 @@ def main() -> int:
               f"d_in={ar.get('d_in')} d_out={ar.get('d_out')}")
         print(f"  policy: {validate['accept_policy'][:160]}...")
 
-    DIAG.mkdir(parents=True, exist_ok=True)
     day = datetime.now().strftime("%Y-%m-%d")
     out = DIAG / f"self_harness_{day}.json"
-    out.write_text(json.dumps(report, indent=2, default=str))
+    atomic_write_text(out, json.dumps(report, indent=2, default=str) + "\n")
     append_jsonl(ARCHIVE, {
         "ts": now_iso(),
         "kind": "self_harness_cycle",

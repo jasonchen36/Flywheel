@@ -30,7 +30,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness_config import load_enforcement_config  # noqa: E402
 from harness_paths import LEARNING, STATE, SIGNALS  # noqa: E402
+from state_io import append_jsonl_many, atomic_write_text, load_jsonl_objects  # noqa: E402
 
 DIAG = LEARNING / "DIAGNOSTICS"
 REVIEW_FILE = SIGNALS / "pending_human_review.jsonl"
@@ -59,15 +61,7 @@ def _load_json(p: Path) -> dict:
 
 
 def _jsonl(p: Path) -> list[dict]:
-    out = []
-    if p.exists():
-        for line in p.read_text().splitlines():
-            if line.strip():
-                try:
-                    out.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return out
+    return load_jsonl_objects(p).records
 
 
 def main() -> int:
@@ -78,8 +72,8 @@ def main() -> int:
 
     eff = _load_json(STATE / "effectiveness_scores.json")
     scores = eff.get("scores") or {}
-    enc = _load_json(STATE / "enforcement_config.json")
-    overrides = enc.get("overrides") or {}
+    enforcement = load_enforcement_config(STATE / "enforcement_config.json")
+    overrides = enforcement.config.overrides
     ace = _load_json(STATE / "ace_playbook.json")
     bullets = ace.get("bullets") or []
     ledger = _load_json(STATE / "skill_autofix_ledger.json")
@@ -166,16 +160,16 @@ def main() -> int:
             lines.append(f"- BEFORE finishing: verify no {r['pattern']} — state evidence or say unverified")
 
     report_md = "\n".join(lines) + "\n"
-    DIAG.mkdir(parents=True, exist_ok=True)
-    (DIAG / f"chronic_failures_{today}.md").write_text(report_md)
-    (DIAG / "chronic_failures_latest.md").write_text(report_md)
-    with SNAPSHOT_FILE.open("a") as f:
-        for r in rows:
-            if r["chronic"]:
-                f.write(json.dumps({
-                    "date": today, "pattern": r["pattern"],
-                    "top_hits": r["top_hits"], "audit_entries": r["audit_entries"],
-                }) + "\n")
+    atomic_write_text(DIAG / f"chronic_failures_{today}.md", report_md)
+    atomic_write_text(DIAG / "chronic_failures_latest.md", report_md)
+    append_jsonl_many(SNAPSHOT_FILE, [
+        {
+            "date": today, "pattern": row["pattern"],
+            "top_hits": row["top_hits"], "audit_entries": row["audit_entries"],
+        }
+        for row in rows
+        if row["chronic"]
+    ])
 
     if args.json:
         print(json.dumps({"date": today, "regressed": rows}, indent=2))

@@ -13,6 +13,7 @@ import json
 from datetime import datetime, timezone
 
 from harness_paths import COMMANDS, LEARNING, LESSONS_DIR, STATE
+from state_io import atomic_write_json, atomic_write_text
 
 SNAPSHOT = STATE / "harness_changelog_last.json"
 CHANGELOG = STATE / "harness_changelog.md"
@@ -81,8 +82,7 @@ def load_previous() -> dict | None:
 
 
 def write_snapshot(timestamp: str, files: dict[str, tuple[float, int]]) -> None:
-    STATE.mkdir(parents=True, exist_ok=True)
-    SNAPSHOT.write_text(json.dumps({"taken_at": timestamp, "files": files}, indent=2) + "\n")
+    atomic_write_json(SNAPSHOT, {"taken_at": timestamp, "files": files})
 
 
 def main() -> int:
@@ -98,9 +98,10 @@ def main() -> int:
             print(f"[dry-run] baseline snapshot would be written ({len(current)} files)")
             return 0
         write_snapshot(timestamp, current)
-        CHANGELOG.write_text(
+        atomic_write_text(
+            CHANGELOG,
             f"# Harness changelog\n\nFirst baseline snapshot taken {timestamp}. "
-            "Nothing to report yet; run again after a SessionEnd.\n"
+            "Nothing to report yet; run again after a SessionEnd.\n",
         )
         print(f"Baseline snapshot written ({len(current)} files). Changelog: {CHANGELOG}")
         return 0
@@ -156,8 +157,7 @@ def main() -> int:
             "",
         ]
     )
-    STATE.mkdir(parents=True, exist_ok=True)
-    CHANGELOG.write_text("\n".join(lines))
+    atomic_write_text(CHANGELOG, "\n".join(lines))
     write_snapshot(timestamp, current)
     print(
         f"Changelog written: {CHANGELOG} "

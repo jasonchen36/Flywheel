@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import atomic_write_json, atomic_write_text, rewrite_jsonl
 from typing import Callable
 
 # Reuse the generator's loaders + classifier + paths — no path/attribution drift.
@@ -1102,15 +1103,9 @@ def main() -> int:
         print("[dry-run] no files written")
         return 0
 
-    SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-
-    with open(EVAL_RESULTS_FILE, "w") as f:  # full re-score each run (idempotent)
-        for row in rows:
-            f.write(json.dumps(row) + "\n")
-    REGISTRY_FILE.write_text(json.dumps(registry, indent=2))
-    (DIAGNOSTICS / f"evals_{today}.md").write_text(report)
+    rewrite_jsonl(EVAL_RESULTS_FILE, rows)  # full re-score each run (idempotent)
+    atomic_write_json(REGISTRY_FILE, registry)
+    atomic_write_text(DIAGNOSTICS / f"evals_{today}.md", report)
 
     print(f"Wrote: {EVAL_RESULTS_FILE} ({len(rows)} fired rows)")
     print(f"Wrote: {REGISTRY_FILE}")

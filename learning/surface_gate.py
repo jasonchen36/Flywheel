@@ -1,101 +1,149 @@
 #!/usr/bin/env python3
-"""surface_gate.py — deterministic pre-apply surface check for harness mutations.
-
-DoorDash Flux lesson: "Each playbook declares the tools it requires, and Flux
-grants only the scoped permissions needed for that task." The deterministic
-equivalent for this harness: a proposal declares the paths it will mutate, and
-this gate checks each against editable_surfaces.json BEFORE anything is applied
--- permission lives outside the LLM's judgment.
-
-This script is READ-ONLY on editable_surfaces.json and never mutates anything.
+"""Deterministic, fail-closed permission check for proposed harness mutations.
 
 Usage:
-  python3 surface_gate.py path1 path2 ...      # check declared target paths
-  python3 surface_gate.py --file proposal.json # paths from a proposal file
-  echo "path1 path2" | python3 surface_gate.py # paths on stdin (whitespace/newline separated)
+  python3 surface_gate.py path1 path2 ...
+  python3 surface_gate.py --file proposal.json
+  echo "path1 path2" | python3 surface_gate.py
 
-Exit codes:
-  0  all paths allowed (or none given)
-  1  at least one path denied/unknown (denied paths printed to stderr)
+Exit codes are 0 when every declared path is allowed, 1 when any path is denied,
+and 2 when the policy or proposal input is missing or malformed.
 """
 
+from __future__ import annotations
+
 import argparse
+import fnmatch
 import json
-import os
 import sys
+from pathlib import Path
+from typing import Any, TextIO
 
-SURFACES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "editable_surfaces.json")
+from harness_paths import HARNESS_HOME, PI_SKILLS
 
-
-def load_rules():
-    if not os.path.exists(SURFACES):
-        print(f"[surface_gate] editable_surfaces.json not found at {SURFACES}", file=sys.stderr)
-        sys.exit(2)
-    with open(SURFACES) as f:
-        return json.load(f)
+SURFACES = Path(__file__).resolve().parent / "editable_surfaces.json"
 
 
-def is_allowed(path, rules, actor=None):
-    """Path is allowed if it matches an allow-glob (fnmatch, ~ expanded) and no
-    deny-glob. Deny wins over allow; unknown paths are DENIED (fail closed).
-    If an actor (script name) is given, it must be listed in the surface's
-    'who' for the match to count.
-    """
-    import fnmatch
+class PolicyError(ValueError):
+    """Raised when a permission policy cannot be used safely."""
 
-    def expand(p):
-        return os.path.abspath(os.path.expanduser(p))
 
-    abs_path = expand(path)
-    deny = rules.get("deny", []) or []
-    for d in deny:
-        if isinstance(d, dict):
-            d = d.get("glob", "")
-        if d and fnmatch.fnmatch(abs_path, expand(d)):
+def _validate_rule(entry: object, *, allow: bool) -> dict[str, Any]:
+    if isinstance(entry, str):
+        if not entry:
+            raise PolicyError("surface glob must not be empty")
+        return {"glob": entry}
+    if not isinstance(entry, dict):
+        raise PolicyError("surface rules must be strings or JSON objects")
+    pattern = entry.get("glob") if "glob" in entry else entry.get("path")
+    if not isinstance(pattern, str) or not pattern:
+        raise PolicyError("surface rule glob or path must be a non-empty string")
+    normalized: dict[str, Any] = {"glob": pattern}
+    if allow and "who" in entry:
+        who = entry["who"]
+        if not isinstance(who, list) or not all(isinstance(actor, str) for actor in who):
+            raise PolicyError("surface rule who must be a list of actor names")
+        normalized["who"] = who
+    return normalized
+
+
+def load_rules(path: Path | None = None) -> dict[str, list[dict[str, Any]]]:
+    """Load and validate an editable-surfaces policy or raise ``PolicyError``."""
+    path = path or SURFACES
+    if not path.exists():
+        raise PolicyError(f"editable_surfaces.json not found at {path}")
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyError(f"cannot read editable surfaces policy: {exc}") from exc
+    if not isinstance(value, dict):
+        raise PolicyError("editable surfaces policy must be a JSON object")
+    allow = value.get("allow", [])
+    deny = value.get("deny", [])
+    if not isinstance(allow, list) or not isinstance(deny, list):
+        raise PolicyError("editable surfaces allow and deny values must be lists")
+    return {
+        "allow": [_validate_rule(entry, allow=True) for entry in allow],
+        "deny": [_validate_rule(entry, allow=False) for entry in deny],
+    }
+
+
+def _expanded_pattern(pattern: str) -> str:
+    expanded = str(Path(pattern).expanduser().resolve())
+    default_harness = str((Path.home() / ".claude").resolve())
+    default_pi_skills = str((Path.home() / ".pi" / "agent" / "skills").resolve())
+    if expanded == default_harness or expanded.startswith(default_harness + "/"):
+        expanded = str(HARNESS_HOME.resolve()) + expanded[len(default_harness):]
+    elif expanded == default_pi_skills or expanded.startswith(default_pi_skills + "/"):
+        expanded = str(PI_SKILLS.resolve()) + expanded[len(default_pi_skills):]
+    return expanded
+
+
+def is_allowed(path: str, rules: dict[str, list[dict[str, Any]]], actor: str | None = None) -> bool:
+    """Return whether *path* matches an allowed surface and no denied surface."""
+    absolute = str(Path(path).expanduser().resolve())
+
+    for rule in rules.get("deny", []):
+        if fnmatch.fnmatch(absolute, _expanded_pattern(rule["glob"])):
             return False
-    for a in rules.get("allow", []) or []:
-        if isinstance(a, str):
-            a = {"glob": a}
-        glob = a.get("glob", "")
-        if not glob:
+    for rule in rules.get("allow", []):
+        if not fnmatch.fnmatch(absolute, _expanded_pattern(rule["glob"])):
             continue
-        if fnmatch.fnmatch(abs_path, expand(glob)):
-            if actor and a.get("who") and actor not in a.get("who", []):
-                continue  # surface allows the path, but not this actor
-            return True
+        permitted_actors = rule.get("who")
+        if actor and permitted_actors and actor not in permitted_actors:
+            continue
+        return True
     return False
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("paths", nargs="*")
-    ap.add_argument("--file", help="JSON file with a 'paths' list")
-    ap.add_argument("--actor", help="script name (e.g. skill_autofix.py) to enforce 'who'")
-    args = ap.parse_args()
+def _proposal_paths(path: Path) -> list[str]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyError(f"cannot read proposal file: {exc}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("paths", []), list):
+        raise PolicyError("proposal file must be an object with a paths list")
+    paths = value.get("paths", [])
+    if not all(isinstance(item, str) and item for item in paths):
+        raise PolicyError("proposal paths must be non-empty strings")
+    return paths
+
+
+def main(argv: list[str] | None = None, *, stdin: TextIO | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="*")
+    parser.add_argument("--file", type=Path, help="JSON file with a paths list")
+    parser.add_argument("--actor", help="script name used to enforce a surface's who list")
+    args = parser.parse_args(argv)
+    input_stream = stdin if stdin is not None else sys.stdin
 
     paths = list(args.paths)
-    if args.file:
-        with open(args.file) as f:
-            paths.extend(json.load(f).get("paths", []))
-    if not paths and not sys.stdin.isatty():
-        paths.extend(sys.stdin.read().split())
+    try:
+        if args.file:
+            paths.extend(_proposal_paths(args.file))
+        if not paths and not input_stream.isatty():
+            paths.extend(input_stream.read().split())
+        if not paths:
+            print("[surface_gate] no paths to check", file=sys.stderr)
+            return 0
+        rules = load_rules()
+    except PolicyError as exc:
+        print(f"[surface_gate] {exc}", file=sys.stderr)
+        return 2
 
-    if not paths:
-        print("[surface_gate] no paths to check", file=sys.stderr)
-        sys.exit(0)
-
-    rules = load_rules()
-    verdicts = [(p, is_allowed(p, rules, actor=args.actor)) for p in paths]
-    denied = [p for p, ok in verdicts if not ok]
-    for p, ok in verdicts:
-        print(f"{'ALLOW' if ok else 'DENY '}  {p}")
+    verdicts = [(path, is_allowed(path, rules, actor=args.actor)) for path in paths]
+    denied = [path for path, allowed in verdicts if not allowed]
+    for path, allowed in verdicts:
+        print(f"{'ALLOW' if allowed else 'DENY '}  {path}")
     if denied:
-        print(f"[surface_gate] {len(denied)} denied path(s); proposal must not touch them.",
-              file=sys.stderr)
-        sys.exit(1)
+        print(
+            f"[surface_gate] {len(denied)} denied path(s); proposal must not touch them.",
+            file=sys.stderr,
+        )
+        return 1
     print(f"[surface_gate] all {len(paths)} path(s) allowed.")
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
+    raise SystemExit(main())

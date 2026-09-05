@@ -179,12 +179,49 @@ def test_installer_tar_fallback_and_idempotency(tmp_path: Path):
     assert (learning / "self_improve.py").is_file()
     assert not (learning / "__pycache__").exists()
     assert os.access(harness / "hooks" / "harness-session-end.sh", os.X_OK)
+    assert (tmp_path / "missing-parent" / "extensions" / "pai-enforcement-gate.ts").is_file()
 
     config = harness / "MEMORY" / "STATE" / "enforcement_config.json"
     config.write_text('{"enabled":false,"overrides":{"x":"off"}}\n')
     _, second = run_installer(tmp_path, force_tar=True)
     assert second.returncode == 0, second.stderr
     assert json.loads(config.read_text())["enabled"] is False
+    _, third = run_installer(tmp_path, force_tar=True)
+    assert third.returncode == 0, third.stderr
+    backups = list((harness / "hooks").glob("RatingCapture.hook.ts.bak.*"))
+    assert len(backups) == 2
+    assert len({path.name for path in backups}) == 2
+    assert not list((harness / "MEMORY" / "STATE").glob("*.tmp.*"))
+
+
+def test_installer_rejects_python_below_supported_floor(tmp_path: Path):
+    home = tmp_path / "home"
+    fake_bin = tmp_path / "bin"
+    home.mkdir()
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = \"--version\" ]; then echo 'Python 3.9.99'; fi\n"
+        "exit 1\n"
+    )
+    fake_python.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(ROOT / "install.sh")],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "HOME": str(home),
+            "HARNESS_HOME": str(tmp_path / "harness"),
+            "HARNESS_SKIP_BUN_INSTALL": "1",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "Python 3.10 or newer is required (found Python 3.9.99)" in proc.stderr
 
 
 def test_custom_harness_home_propagates_to_runtime_modules(tmp_path: Path):

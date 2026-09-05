@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
 from review_store import enqueue_pending, load_reviews
+from state_io import atomic_write_text, load_jsonl_objects, rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -68,24 +69,11 @@ STOPWORDS = {"this", "that", "with", "from", "have", "will", "your", "what", "wh
 
 
 def load_ledger() -> list[dict]:
-    if not CANDIDATES_FILE.exists():
-        return []
-    out = []
-    for line in CANDIDATES_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(CANDIDATES_FILE).records
 
 
 def write_ledger(records: list[dict]) -> None:
-    CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CANDIDATES_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(CANDIDATES_FILE, records)
 
 
 def load_review_queue() -> list[dict]:
@@ -175,8 +163,7 @@ def main() -> int:
         print("[dry-run] no files written")
         return 0
 
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-    (DIAGNOSTICS / f"pattern_promotion_{today}.md").write_text(report)
+    atomic_write_text(DIAGNOSTICS / f"pattern_promotion_{today}.md", report)
 
     if not candidates:
         return 0
@@ -230,7 +217,7 @@ def promote_to_taxonomy(pattern: str, keywords: list[str]) -> bool:
         f'    "{pattern}": [{kw_literal}],\n'
     )
     new_text = text[:close_idx + 1] + new_entry + text[close_idx + 1:]
-    SELF_IMPROVE_PY.write_text(new_text)
+    atomic_write_text(SELF_IMPROVE_PY, new_text)
     return True
 
 

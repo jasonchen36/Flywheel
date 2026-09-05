@@ -5,12 +5,13 @@ install-dev:
 	bun install --frozen-lockfile
 
 test:
-	python3 -m pytest --cov=learning --cov-branch --cov-fail-under=18 -q
+	python3 -m pytest --cov=learning --cov-branch --cov-fail-under=26 -q
 
 coverage-foundations:
 	python3 -m pytest tests/test_state_io.py tests/test_review_store.py tests/test_harness_config.py \
-		--cov=state_io --cov=review_store --cov=harness_config --cov-branch \
-		--cov-fail-under=100 -q
+		tests/test_surface_gate.py tests/test_ratings_hygiene.py \
+		--cov=state_io --cov=review_store --cov=harness_config --cov=surface_gate \
+		--cov=ratings_hygiene --cov-branch --cov-fail-under=100 -q
 
 lint:
 	ruff check learning tests

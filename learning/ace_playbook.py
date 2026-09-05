@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 from harness_paths import HARNESS_HOME, LESSONS_DIR
+from state_io import atomic_write_json, atomic_write_text
 
 SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
 OUT_JSON = HARNESS_HOME / "MEMORY/STATE/ace_playbook.json"
@@ -556,12 +557,10 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    OUT_JSON.write_text(json.dumps(pb, indent=2))
-    OUT_MD.write_text(md)
-    DIAG.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(OUT_JSON, pb)
+    atomic_write_text(OUT_MD, md)
     day = datetime.now().strftime("%Y-%m-%d")
-    (DIAG / f"ace_playbook_{day}.md").write_text(md)
+    atomic_write_text(DIAG / f"ace_playbook_{day}.md", md)
     print(f"[ace_playbook] Wrote {OUT_JSON}")
     print(f"[ace_playbook] Wrote {OUT_MD}")
     return 0

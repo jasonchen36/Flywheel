@@ -48,10 +48,10 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     report: dict = {"ts": now_iso(), "checks": {}, "ok": True, "warnings": [], "errors": []}
 
@@ -64,8 +64,28 @@ def main() -> int:
 
     # Effectiveness
     scores = state_object("effectiveness_scores.json")
-    sc = scores.get("scores") or {}
-    escalate = scores.get("escalate") or []
+    sc_value = scores.get("scores") or {}
+    sc: dict[str, dict[str, Any]] = {}
+    if isinstance(sc_value, dict):
+        invalid_score_rows = []
+        for pattern, value in sc_value.items():
+            if isinstance(pattern, str) and isinstance(value, dict):
+                sc[pattern] = value
+            else:
+                invalid_score_rows.append(str(pattern))
+        if invalid_score_rows:
+            report["errors"].append(
+                f"effectiveness score rows must be JSON objects: {invalid_score_rows}"
+            )
+            report["ok"] = False
+    elif sc_value:
+        report["errors"].append("effectiveness scores must be a JSON object")
+        report["ok"] = False
+    escalate_value = scores.get("escalate") or []
+    escalate = escalate_value if isinstance(escalate_value, list) else []
+    if escalate_value and not isinstance(escalate_value, list):
+        report["errors"].append("effectiveness escalate must be a JSON list")
+        report["ok"] = False
     stale = scores.get("stale_pending") or [
         p for p, v in sc.items() if (v or {}).get("verdict") == "stale-pending"
     ]
@@ -151,16 +171,11 @@ def main() -> int:
     # still reports green. 2026-08-12: PAI_HAIKU_BACKGROUND_DISABLED=1 killed
     # sentiment capture for 27d and healthcheck said OK — never again.
     newest_rating = None
-    if Path(RATINGS_FILE).exists():
-        for line in Path(RATINGS_FILE).read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                ts = json.loads(line).get("timestamp")
-            except json.JSONDecodeError:
-                continue
-            if ts and (newest_rating is None or str(ts) > newest_rating):
-                newest_rating = str(ts)
+    rating_rows = load_jsonl_objects(Path(RATINGS_FILE))
+    for row in rating_rows.records:
+        timestamp = row.get("timestamp")
+        if timestamp and (newest_rating is None or str(timestamp) > newest_rating):
+            newest_rating = str(timestamp)
     rating_age_days = None
     if newest_rating:
         try:
@@ -173,7 +188,12 @@ def main() -> int:
     report["checks"]["signal_freshness"] = {
         "newest_rating": newest_rating,
         "rating_age_days": rating_age_days,
+        "invalid_lines": list(rating_rows.invalid_lines),
     }
+    if rating_rows.invalid_lines:
+        report["warnings"].append(
+            f"ratings contain malformed JSON object rows: {list(rating_rows.invalid_lines)}"
+        )
     if n_ratings == 0:
         report["checks"]["signal_freshness"]["status"] = "no_ratings_yet"
     elif rating_age_days is None:
@@ -197,22 +217,25 @@ def main() -> int:
     pending = STATE / "graphiti_pending_episodes.jsonl"
     archive = STATE / "graphiti_flushed_archive.jsonl"
     preflight = STATE / "graph_preflight.md"
-    pend_n = (
-        len([l for l in pending.read_text().splitlines() if l.strip()])
-        if pending.exists()
-        else 0
-    )
-    arch_n = (
-        len([l for l in archive.read_text().splitlines() if l.strip()])
-        if archive.exists()
-        else 0
-    )
+    pending_rows = load_jsonl_objects(pending)
+    archive_rows = load_jsonl_objects(archive)
+    pend_n = len(pending_rows.records)
+    arch_n = len(archive_rows.records)
     report["checks"]["graph"] = {
         "pending_episodes": pend_n,
         "flushed_archive": arch_n,
         "preflight_exists": preflight.exists(),
         "preflight_bytes": preflight.stat().st_size if preflight.exists() else 0,
+        "pending_invalid_lines": list(pending_rows.invalid_lines),
+        "archive_invalid_lines": list(archive_rows.invalid_lines),
     }
+    if pending_rows.invalid_lines or archive_rows.invalid_lines:
+        report["errors"].append(
+            "graph state has malformed JSON object rows: "
+            f"pending={list(pending_rows.invalid_lines)} "
+            f"archive={list(archive_rows.invalid_lines)}"
+        )
+        report["ok"] = False
     if pend_n > 10:
         report["warnings"].append(
             f"{pend_n} graphiti episodes still pending — flush may be failing"
@@ -336,17 +359,20 @@ def main() -> int:
 
     # skill_autofix
     led = state_object("skill_autofix_ledger.json")
+    edits_value = led.get("edits", [])
+    edits = [edit for edit in edits_value if isinstance(edit, dict)] if isinstance(edits_value, list) else []
+    if edits_value and (not isinstance(edits_value, list) or len(edits) != len(edits_value)):
+        report["errors"].append("skill_autofix edits must be a JSON list of objects")
+        report["ok"] = False
     report["checks"]["skill_autofix"] = {
-        "active_edits": sum(
-            1 for e in led.get("edits", []) if e.get("status") == "active"
-        ),
-        "total_edits": len(led.get("edits", [])),
+        "active_edits": sum(1 for edit in edits if edit.get("status") == "active"),
+        "total_edits": len(edits),
     }
     # Burn-in stall: active edits that can never complete measurement because
     # no post-apply traffic exists for the skill (or the sensor is dark).
     today = datetime.now(timezone.utc).date()
     stalled = []
-    for edit in led.get("edits", []):
+    for edit in edits:
         if edit.get("status") != "active":
             continue
         try:
@@ -366,11 +392,19 @@ def main() -> int:
     # Gates last run
     suite = state_object("held_out_suite_last.json")
     rolls = state_object("agent_rollouts_last.json")
+    suite_summary_value = suite.get("summary")
+    suite_summary = suite_summary_value if isinstance(suite_summary_value, dict) else suite
+    suite_gate_value = suite.get("gate")
+    suite_gate = suite_gate_value if isinstance(suite_gate_value, dict) else {}
+    rolls_gate_value = rolls.get("gate")
+    rolls_gate = rolls_gate_value if isinstance(rolls_gate_value, dict) else {}
+    rolls_summary_value = rolls.get("summary")
+    rolls_summary = rolls_summary_value if isinstance(rolls_summary_value, dict) else {}
     report["checks"]["gates"] = {
-        "held_out_suite_gate_pass": (suite.get("gate") or {}).get("gate_pass"),
-        "held_out_accept": suite.get("accept"),
-        "agent_rollouts_gate_pass": (rolls.get("gate") or {}).get("gate_pass"),
-        "agent_rollouts_pass_rate": (rolls.get("summary") or {}).get("pass_rate"),
+        "held_out_suite_gate_pass": suite_gate.get("gate_pass"),
+        "held_out_accept": suite_summary.get("accept"),
+        "agent_rollouts_gate_pass": rolls_gate.get("gate_pass"),
+        "agent_rollouts_pass_rate": rolls_summary.get("pass_rate"),
     }
 
     # Critical paths
@@ -415,5 +449,5 @@ def main() -> int:
     return 0 if report["ok"] else 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

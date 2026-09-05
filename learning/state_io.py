@@ -149,17 +149,31 @@ def rewrite_jsonl(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
         rewrite_jsonl_unlocked(path, records)
 
 
-def append_jsonl_unlocked(path: Path, record: Mapping[str, Any]) -> None:
-    """Append one object when the caller already owns the file's sidecar lock."""
+def append_jsonl_many_unlocked(
+    path: Path, records: Iterable[Mapping[str, Any]]
+) -> None:
+    """Append objects in one durable batch when the caller already owns the lock."""
+    lines = [json.dumps(record, sort_keys=True) for record in records]
+    if not lines:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, sort_keys=True) + "\n"
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(line)
+        handle.write("".join(f"{line}\n" for line in lines))
         handle.flush()
         os.fsync(handle.fileno())
 
 
+def append_jsonl_unlocked(path: Path, record: Mapping[str, Any]) -> None:
+    """Append one object when the caller already owns the file's sidecar lock."""
+    append_jsonl_many_unlocked(path, [record])
+
+
+def append_jsonl_many(path: Path, records: Iterable[Mapping[str, Any]]) -> None:
+    """Append JSON objects under the same sidecar lock used by rewriters."""
+    with exclusive_lock(path):
+        append_jsonl_many_unlocked(path, records)
+
+
 def append_jsonl(path: Path, record: Mapping[str, Any]) -> None:
     """Append one JSON object under the same sidecar lock used by rewriters."""
-    with exclusive_lock(path):
-        append_jsonl_unlocked(path, record)
+    append_jsonl_many(path, [record])

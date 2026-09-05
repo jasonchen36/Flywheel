@@ -44,6 +44,15 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import (
+    append_jsonl,
+    append_jsonl_many,
+    atomic_write_text,
+    exclusive_lock,
+    load_jsonl_objects,
+    rewrite_jsonl,
+    rewrite_jsonl_unlocked,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -125,23 +134,21 @@ def gap_patterns() -> list[str]:
 
 # ── Queue I/O ────────────────────────────────────────────────────────────────────────
 def read_queue() -> list[dict]:
-    if not PENDING_FILE.exists():
-        return []
-    rows = []
-    for line in PENDING_FILE.read_text().splitlines():
-        line = line.strip()
-        if line:
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return rows
+    return load_jsonl_objects(PENDING_FILE).records
 
 
 def write_queue(rows: list[dict]) -> None:
-    SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
-    rows = rows[-QUEUE_CAP:]
-    PENDING_FILE.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    rewrite_jsonl(PENDING_FILE, rows[-QUEUE_CAP:])
+
+
+def drain_queue(judged_keys: set[str]) -> list[dict]:
+    """Remove judged turns without dropping rows appended during model execution."""
+    with exclusive_lock(PENDING_FILE):
+        current = read_queue()
+        remaining = [turn for turn in current if turn_key(turn) not in judged_keys]
+        remaining = remaining[-QUEUE_CAP:]
+        rewrite_jsonl_unlocked(PENDING_FILE, remaining)
+        return remaining
 
 
 # ── The judge ──────────────────────────────────────────────────────────────────────────
@@ -256,7 +263,6 @@ def reclass_other(limit: int = 40, dry_run: bool = False) -> int:
         print(f"  {e.timestamp[:19]} r={e.rating} → {failed_pats[:3]}")
         if dry_run:
             continue
-        OTHER_RECLASS_FILE.parent.mkdir(parents=True, exist_ok=True)
         rec = {
             "timestamp": e.timestamp,
             "session_id": e.session_id,
@@ -266,21 +272,21 @@ def reclass_other(limit: int = 40, dry_run: bool = False) -> int:
             "summary": (e.sentiment_summary or "")[:160],
             "evidence": {p: matrix[p].get("evidence", "") for p in failed_pats},
         }
-        with open(OTHER_RECLASS_FILE, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-        # Also append failed patterns to judge_results for measure_effectiveness
-        with open(RESULTS_FILE, "a") as f:
-            for p in failed_pats:
-                f.write(json.dumps({
-                    "timestamp": e.timestamp,
-                    "session_id": e.session_id,
-                    "pattern": p,
-                    "passed": False,
-                    "evidence": matrix[p].get("evidence", ""),
-                    "skill": e.skill,
-                    "repo": e.repo,
-                    "source": "judge_reclass_other",
-                }) + "\n")
+        append_jsonl(OTHER_RECLASS_FILE, rec)
+        # Also append failed patterns to judge_results for measure_effectiveness.
+        append_jsonl_many(RESULTS_FILE, [
+            {
+                "timestamp": e.timestamp,
+                "session_id": e.session_id,
+                "pattern": pattern,
+                "passed": False,
+                "evidence": matrix[pattern].get("evidence", ""),
+                "skill": e.skill,
+                "repo": e.repo,
+                "source": "judge_reclass_other",
+            }
+            for pattern in failed_pats
+        ])
 
     print(f"[reclass-other] labeled={labeled} still_other={still_other}")
     return labeled
@@ -311,9 +317,9 @@ def main() -> int:
             print("[reclass-other] --no-llm: nothing to do")
             return 0
         n = reclass_other(limit=args.limit, dry_run=args.dry_run)
-        DIAG_DIR.mkdir(parents=True, exist_ok=True)
-        (DIAG_DIR / f"reclass_other_{today}.md").write_text(
-            f"# Reclass other — {today}\n\nlabeled this run: {n}\n"
+        atomic_write_text(
+            DIAG_DIR / f"reclass_other_{today}.md",
+            f"# Reclass other — {today}\n\nlabeled this run: {n}\n",
         )
         return 0
 
@@ -366,16 +372,10 @@ def main() -> int:
         print("[dry-run] queue untouched, nothing written")
         return 0
 
-    if rows:
-        SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
-        with open(RESULTS_FILE, "a") as f:
-            for r in rows:
-                f.write(json.dumps(r) + "\n")
-    # Drain only the turns we actually judged; keep the rest (and anything past MAX_PER_RUN).
-    remaining = [t for t in queue if turn_key(t) not in judged_keys]
-    write_queue(remaining)
-    DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    (DIAG_DIR / f"judge_{today}.md").write_text(report_txt)
+    append_jsonl_many(RESULTS_FILE, rows)
+    # Re-read under lock before draining so turns appended while judging survive.
+    remaining = drain_queue(judged_keys)
+    atomic_write_text(DIAG_DIR / f"judge_{today}.md", report_txt)
 
     print(f"Wrote: {RESULTS_FILE} (+{len(rows)} rows) | queue now {len(remaining)}")
     return 0
