@@ -47,8 +47,16 @@ def now_iso() -> str:
 
 def load_split(name: str) -> list[dict]:
     path = FIXTURES / f"{name}.json"
-    data = json.loads(path.read_text())
-    return data.get("cases", [])
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read {name} fixtures: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("cases"), list):
+        raise ValueError(f"{name} fixtures must be an object with a cases list")
+    cases = data["cases"]
+    if not all(isinstance(case, dict) for case in cases):
+        raise ValueError(f"{name} fixture cases must be JSON objects")
+    return cases
 
 
 def case_ok(case: dict, scored: dict) -> tuple[bool, list[str]]:
@@ -190,7 +198,7 @@ def write_report(summary: dict, gate: dict | None) -> Path:
     return path
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Held-out fixture suite (Self-Harness D_in/D_out)")
     ap.add_argument("--update-baseline", action="store_true",
                     help="write current results as the regression baseline")
@@ -198,10 +206,14 @@ def main() -> int:
                     help="exit 1 if suite fails OR D_out/D_in regressed vs baseline")
     ap.add_argument("--json", action="store_true", help="print summary JSON")
     ap.add_argument("--dry-run", action="store_true", help="do not write state files")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    d_in = run_split(load_split("d_in"))
-    d_out = run_split(load_split("d_out"))
+    try:
+        d_in = run_split(load_split("d_in"))
+        d_out = run_split(load_split("d_out"))
+    except ValueError as exc:
+        print(f"[held_out_suite] invalid fixtures: {exc}", file=sys.stderr)
+        return 2
     summary = summarize(d_in, d_out)
 
     gate = None
@@ -209,8 +221,8 @@ def main() -> int:
         try:
             baseline = json.loads(BASELINE_FILE.read_text())
             gate = compare_baseline(summary, baseline)
-        except (json.JSONDecodeError, OSError, KeyError) as e:
-            gate = {"has_baseline": False, "error": str(e), "gate_pass": True}
+        except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError) as exc:
+            gate = {"has_baseline": False, "error": str(exc), "gate_pass": False}
 
     print(f"[held_out_suite] D_in  {summary['d_in']['passed']}/{summary['d_in']['n']} "
           f"({summary['d_in']['pass_rate']:.1%})")
@@ -250,10 +262,10 @@ def main() -> int:
     if args.gate:
         if not summary["accept"]:
             return 1
-        if gate and gate.get("has_baseline") and not gate.get("gate_pass"):
+        if gate and not gate.get("gate_pass"):
             return 1
     return 0 if summary["accept"] else 1
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

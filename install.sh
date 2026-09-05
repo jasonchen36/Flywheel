@@ -32,7 +32,7 @@ copy_tree() {
   fi
 }
 
-for required_dir in learning hooks templates skills config; do
+for required_dir in learning hooks templates skills config runtime; do
   if [ ! -d "$ROOT/$required_dir" ]; then
     echo "error: installer source directory is missing: $ROOT/$required_dir" >&2
     exit 1
@@ -59,7 +59,7 @@ echo "Installing Flywheel → $HARNESS_HOME"
 mkdir -p "$LEARNING" "$STATE" "$LEARNING/SIGNALS" "$LEARNING/DIAGNOSTICS" \
   "$LEARNING/FAILURES" "$HARNESS_HOME/MEMORY/lessons" \
   "$HARNESS_HOME/meeting-summaries" "$HOOKS" "$HOOKS/lib" \
-  "$HARNESS_HOME/commands" "$HARNESS_HOME/skills"
+  "$HARNESS_HOME/runtime" "$HARNESS_HOME/commands" "$HARNESS_HOME/skills"
 
 # Python loop
 copy_tree "$ROOT/learning" "$LEARNING" "__pycache__"
@@ -79,6 +79,9 @@ if [ ! -f "$HARNESS_HOME/PAI/USER/PAISECURITYSYSTEM/patterns.yaml" ]; then
   cp "$ROOT/config/patterns.example.yaml" "$HARNESS_HOME/PAI/USER/PAISECURITYSYSTEM/patterns.yaml"
   echo "  wrote security patterns.yaml"
 fi
+
+# Shared Bun state runtime used by both Claude hooks and pi extensions.
+copy_tree "$ROOT/runtime" "$HARNESS_HOME/runtime"
 
 # Hooks (backup if present)
 for f in "$ROOT/hooks"/*.ts; do
@@ -115,6 +118,8 @@ cp "$ROOT/skills/self-improve/SKILL.md" "$HARNESS_HOME/commands/self-improve.md"
 if [ "$PI_EXT_EXPLICIT" = "x" ] || [ -d "$(dirname "$PI_EXT")" ]; then
   mkdir -p "$PI_EXT"
   cp "$ROOT/pi/"*.ts "$PI_EXT/"
+  mkdir -p "$(dirname "$PI_EXT")/runtime"
+  copy_tree "$ROOT/runtime" "$(dirname "$PI_EXT")/runtime"
   echo "  installed pi extensions → $PI_EXT"
 fi
 

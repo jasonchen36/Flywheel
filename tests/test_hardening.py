@@ -370,6 +370,7 @@ def _run_enforcement_hook(harness: Path, payload: dict) -> subprocess.CompletedP
     hooks = harness / "hooks"
     if not hooks.exists():
         shutil.copytree(ROOT / "hooks", hooks)
+        shutil.copytree(ROOT / "runtime", harness / "runtime")
     parser = harness / "PAI" / "Tools" / "TranscriptParser.ts"
     parser.parent.mkdir(parents=True, exist_ok=True)
     parser.write_text(

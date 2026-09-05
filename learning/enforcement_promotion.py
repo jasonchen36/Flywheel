@@ -37,12 +37,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import datetime, timedelta, timezone
 from harness_config import ConfigLoadResult, load_enforcement_config
 from harness_paths import HARNESS_HOME
 from review_store import enqueue_pending, load_reviews
+from state_io import load_jsonl_objects
 
 ENFORCE_LOG   = HARNESS_HOME / "MEMORY/LEARNING/enforcement_log.jsonl"
 CONFIG_JSON   = HARNESS_HOME / "MEMORY/STATE/enforcement_config.json"
@@ -63,29 +63,22 @@ def load_config() -> ConfigLoadResult:
 
 
 def load_enforcement_log() -> list[dict]:
-    if not ENFORCE_LOG.exists():
-        return []
-    rows = []
-    for line in ENFORCE_LOG.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return rows
+    return load_jsonl_objects(ENFORCE_LOG).records
 
 
 def load_review_queue() -> list[dict]:
     return load_reviews(REVIEW_FILE)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--window-days", type=int, default=DEFAULT_WINDOW_DAYS)
     ap.add_argument("--min-fires", type=int, default=DEFAULT_MIN_FIRES)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.window_days <= 0 or args.min_fires <= 0:
+        print("[enforcement_promotion] window-days and min-fires must be positive", file=sys.stderr)
+        return 2
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cutoff = datetime.now(timezone.utc) - timedelta(days=args.window_days)
@@ -99,8 +92,13 @@ def main() -> int:
 
     log_rows = load_enforcement_log()
     review_records = load_review_queue()
-    already_queued = {r["pattern"] for r in review_records
-                       if r.get("status") == "pending" and r.get("source") == "enforcement_promotion"}
+    already_queued = {
+        str(record.get("pattern"))
+        for record in review_records
+        if record.get("pattern")
+        and record.get("status") == "pending"
+        and record.get("source") == "enforcement_promotion"
+    }
 
     candidates = []
     for pattern in sorted(CONFIG_ONLY_PATTERNS):
@@ -116,10 +114,15 @@ def main() -> int:
             if row.get("pattern") != pattern:
                 continue
             total_fires += 1
-            try:
-                ts = datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
-            except (KeyError, ValueError):
+            timestamp = row.get("ts")
+            if not isinstance(timestamp, str):
                 continue
+            try:
+                ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
             if ts >= cutoff:
                 fires_in_window += 1
 
@@ -169,5 +172,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

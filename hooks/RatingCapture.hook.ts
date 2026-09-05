@@ -28,8 +28,9 @@
  * - Implicit sentiment path: ~0.5-2s (Gemini Flash via Inference fast tier)
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
 import { execFileSync } from 'child_process';
+import { appendJsonl } from '../runtime/state-io';
 import { join } from 'path';
 import { inference } from '../PAI/Tools/Inference';
 import { getIdentity, getPrincipal, getPrincipalName } from './lib/identity';
@@ -667,7 +668,7 @@ function enqueueForJudge(sessionId: string, response: string, context: string): 
       context: (context || '').slice(0, 2000),
       ...SIGNAL_CTX,  // tools_used, files_touched, repo, skill
     };
-    appendFileSync(PENDING_JUDGE_FILE, JSON.stringify(row) + '\n', 'utf-8');
+    appendJsonl(PENDING_JUDGE_FILE, row);
     console.error('[RatingCapture] Enqueued unrated turn for outcome judge');
   } catch (err) {
     console.error(`[RatingCapture] enqueueForJudge failed (non-fatal): ${err}`);
@@ -713,7 +714,7 @@ function writeRating(entry: RatingEntry): void {
     skill_candidates: skillCandidates,
     ...(evalResults ? { eval_results: evalResults } : {}),
   };
-  appendFileSync(RATINGS_FILE, JSON.stringify(enriched) + '\n', 'utf-8');
+  appendJsonl(RATINGS_FILE, enriched);
   const source = entry.source === 'implicit' ? 'implicit' : 'explicit';
 
   console.error(

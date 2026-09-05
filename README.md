@@ -76,6 +76,7 @@ $HARNESS_HOME/   # default ~/.claude
     STATE/             # scores, ACE playbook, enforcement_config, lesson_archive
     lessons/           # lesson_autogen_*.md
   hooks/               # TypeScript / bash hooks (EnforcementGate, StopHooks, hook-io)
+  runtime/             # Bun/Python-compatible portable state-lock protocol
   meeting-summaries/   # drop *.summary.md for Graphiti ingest
   skills/
 ```
@@ -84,7 +85,7 @@ $HARNESS_HOME/   # default ~/.claude
 
 ## Runtime Requirements
 
-- Python 3.11+ and the packages in `requirements.txt`
+- Python 3.10+ and the packages in `requirements.txt`
 - Bun for Claude-compatible TypeScript hooks
 - `rsync` or `tar` for installation; `tar` is the automatic fallback
 - Optional: OpenCode (`deepseek-v4-flash`), Vertex Gemini, or Anthropic for background LLM labels (`PAI_BACKGROUND_LLM_PROVIDER=opencode`)
@@ -124,7 +125,7 @@ python3 held_out_suite.py --gate
 | Grok Build | `[compat.claude] hooks` reading same Claude paths |
 | pi | `pi/*.ts` extensions + SessionEnd via Claude-compatible bridge |
 
-Tag ratings with `agent: claude|grok|pi` (hooks set this when possible).
+Tag ratings with `agent: claude|grok|pi` (hooks set this when possible). Claude and pi append ratings, pending judge work, and enforcement events through the same ownership-directory lock protocol used by Python rewriters, preventing cross-runtime lost updates. Dead owners recover automatically; long-running live owners are never evicted solely because of lock age.
 
 ---
 
@@ -152,7 +153,7 @@ make install-dev
 make check
 ```
 
-The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 26% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, validated configuration, surface permissions, and ratings hygiene each require 100% statement and branch coverage. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 39% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, validated configuration, surface permissions, ratings hygiene, and config-only enforcement promotion each require 100% statement and branch coverage. Direct lifecycle tests cover held-out fixture validation, self-harness result reuse, session auto-seeding, and graph synchronization without live network or model dependencies. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 
