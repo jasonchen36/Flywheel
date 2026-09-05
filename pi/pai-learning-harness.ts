@@ -25,7 +25,7 @@ import {
 import { join } from "node:path";
 
 const HOME = process.env.HOME!;
-const PAI_DIR = process.env.PAI_DIR || join(HOME, ".claude");
+const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(HOME, ".claude");
 const SIGNALS_DIR = join(PAI_DIR, "MEMORY", "LEARNING", "SIGNALS");
 const RATINGS_FILE = join(SIGNALS_DIR, "ratings.jsonl");
 const LAST_RESPONSE_CACHE = join(PAI_DIR, "MEMORY", "STATE", "last-response.txt");

@@ -9,6 +9,7 @@ VENV_DIR="${GRAPHITI_VENV:-$HOME/.local/share/graphiti-memory-venv}"
 
 echo "==> Empty Neo4j (volume: graphiti_neo4j_personal_data)"
 cd "$ROOT"
+# shellcheck source=/dev/null
 if [ -f .env ]; then set -a; source .env; set +a; fi
 docker compose up -d
 
@@ -23,8 +24,10 @@ echo "==> Config"
 mkdir -p "$INSTALL_DIR/mcp_server/config"
 cp "$ROOT/config/config.yaml.example" "$INSTALL_DIR/mcp_server/config/config.yaml"
 if [ -f "$ROOT/.env" ]; then
-  # shellcheck disable=SC1091
-  set -a; source "$ROOT/.env"; set +a
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT/.env"
+  set +a
 fi
 
 echo "==> Python venv + install mcp_server"

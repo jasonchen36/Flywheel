@@ -19,14 +19,12 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import LEARNING, SCRUM_DIR, STATE
 
-HOME = Path.home()
-REC = HOME / ".claude/scrum-recordings"
-STATE = HOME / ".claude/MEMORY/STATE"
+REC = SCRUM_DIR
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 ARCHIVE = STATE / "graphiti_flushed_archive.jsonl"
 LEDGER = STATE / "scrum_graphiti_ingest_ledger.json"
-LEARNING = HOME / ".claude/MEMORY/LEARNING"
 MIN_BYTES = 900
 
 

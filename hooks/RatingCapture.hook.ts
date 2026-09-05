@@ -29,7 +29,7 @@
  */
 
 import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { inference } from '../PAI/Tools/Inference';
 import { getIdentity, getPrincipal, getPrincipalName } from './lib/identity';
@@ -76,7 +76,7 @@ interface RatingEntry {
 
 // ── Shared Constants ──
 
-const BASE_DIR = process.env.PAI_DIR || join(process.env.HOME!, '.claude');
+const BASE_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(process.env.HOME!, '.claude');
 const SIGNALS_DIR = join(BASE_DIR, 'MEMORY', 'LEARNING', 'SIGNALS');
 const RATINGS_FILE = join(SIGNALS_DIR, 'ratings.jsonl');
 const PENDING_JUDGE_FILE = join(SIGNALS_DIR, 'pending_judge.jsonl');  // unrated turns → judge_outcomes.py
@@ -121,7 +121,7 @@ const PATH_SKILL_RULES: Array<{ skill: string; test: (s: string) => boolean }> =
 
 function loadKnownCommands(): Set<string> {
   try {
-    const dir = join(process.env.HOME || '', '.claude/commands');
+    const dir = join(BASE_DIR, 'commands');
     if (!existsSync(dir)) return new Set<string>();
     return new Set(
       readdirSync(dir)
@@ -275,15 +275,18 @@ function getSignalContext(transcriptPath: string, currentPrompt: string): Signal
     for (const rule of PATH_SKILL_RULES) {
       if (rule.test(pathBlob)) pushSkill(rule.skill);
     }
-    // If a touched path is literally under commands/, attribute that command skill
+    // If a touched path is under the configured commands directory, attribute that skill.
+    const commandsPrefix = `${join(BASE_DIR, 'commands').replace(/\\/g, '/')}/`;
     for (const fp of files) {
-      const m = String(fp).match(/\.claude\/commands\/([a-z][\w-]*)\.md$/i);
-      if (m?.[1]) pushSkill(m[1]);
+      const normalized = String(fp).replace(/\\/g, '/');
+      if (!normalized.startsWith(commandsPrefix)) continue;
+      const slug = normalized.slice(commandsPrefix.length).match(/^([a-z][\w-]*)\.md$/i)?.[1];
+      if (slug) pushSkill(slug);
     }
 
     try {
       const dir = cwd || process.cwd();
-      const root = execSync(`git -C ${JSON.stringify(dir)} rev-parse --show-toplevel`, {
+      const root = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
         encoding: 'utf-8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
       if (root) ctx.repo = root.split('/').pop() || '';
@@ -632,7 +635,7 @@ async function analyzeSentiment(prompt: string, context: string): Promise<Sentim
 function scoreEvals(text: string): RatingEntry['eval_results'] | undefined {
   if (!text || !text.trim()) return undefined;
   try {
-    const out = execSync(`python3 ${JSON.stringify(EVALS_SCRIPT)} --score-stdin`, {
+    const out = execFileSync('python3', [EVALS_SCRIPT, '--score-stdin'], {
       input: text, encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'ignore'],
     }).trim();
     if (!out) return undefined;

@@ -35,11 +35,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import shutil
 import subprocess
 import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from harness_paths import COMMANDS, DIAGNOSTICS, PI_SKILLS, STATE
 
 # Shared primitives — same cross-import discipline the rest of the loop uses (zero drift).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,12 +55,12 @@ from self_improve import (  # noqa: E402
 from measure_effectiveness import verdict_for  # noqa: E402
 
 # ── Paths ────────────────────────────────────────────────────────────────────────
-COMMANDS_DIR = Path.home() / ".claude/commands"
-PI_SKILLS_DIR = Path.home() / ".pi/agent/skills"
-STATE_DIR    = Path.home() / ".claude/MEMORY/STATE"
+COMMANDS_DIR = COMMANDS
+PI_SKILLS_DIR = PI_SKILLS
+STATE_DIR = STATE
 LEDGER_FILE  = STATE_DIR / "skill_autofix_ledger.json"
 SNAP_REPO    = STATE_DIR / "skillfix_repo"
-DIAG_DIR     = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+DIAG_DIR = DIAGNOSTICS
 
 # ── Gates ──────────────────────────────────────────────────────────────────────────
 LOW       = 4     # rating <= LOW is a failure session (mirrors measure_effectiveness.LOW)
@@ -71,6 +74,11 @@ MIN_AFTER = 5     # post-edit sessions required before judging an applied edit
 # Real skills (pr-workflow, bq, dataform, …) have no hard cap beyond the section itself.
 GENERAL_SESSION_MAX_BULLETS = 5
 GENERAL_SESSION_SKILL = "general-session"
+MAX_VALIDATION_ARGS = 64
+ALLOWED_VALIDATION_COMMANDS = frozenset(
+    {"bun", "cargo", "go", "mypy", "npm", "pnpm", "pytest", "python", "python3", "ruff", "shellcheck", "yarn"}
+)
+SHELL_CONTROL_TOKENS = frozenset({"&&", "||", ";", "|", "<", ">", ">>", "2>", "2>>", "&"})
 
 # ── Bounded-edit markers ────────────────────────────────────────────────────────────
 START = "<!-- AUTO-LEARNED-GUARDRAILS:start -->"
@@ -162,6 +170,8 @@ def validate_skill_content(text: str) -> bool:
         print(f"[validation-error] Unbalanced backticks/code fences (count: {fence_count})")
         return False
 
+    return True
+
 
 def parse_validation_contract(block: str) -> str | None:
     """A generated guardrail may opt into a deterministic validation contract:
@@ -178,18 +188,74 @@ def parse_validation_contract(block: str) -> str | None:
     return None
 
 
-def run_validation(cmd: str, cwd: Path, timeout: int = 90) -> tuple[bool, str]:
-    """Run a declared validation command; returns (ok, tail_of_output)."""
+def _validation_argv(cmd: str) -> tuple[list[str] | None, str]:
+    """Parse and constrain an LLM-authored validation command.
+
+    Validation contracts are untrusted text. They may invoke a small set of
+    local verification tools, but they may not use a shell, environment
+    assignments, redirection, pipelines, command substitution, or arbitrary
+    executables.
+    """
+    if not cmd.strip():
+        return None, "validation command is empty"
+    if any(token in cmd for token in ("`", "$(", "${", "\n", "\r", "\\\n")):
+        return None, "validation command contains shell expansion or a newline"
+    if any(character in cmd for character in ";&|<>"):
+        return None, "validation command contains a shell control operator"
     try:
-        r = subprocess.run(cmd, shell=True, cwd=str(cwd), capture_output=True,
-                           text=True, timeout=timeout)
-        out = (r.stdout or "") + (r.stderr or "")
-        return r.returncode == 0, out.strip()[-500:]
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return False, str(e)[:500]
+        argv = shlex.split(cmd, posix=True)
+    except ValueError as exc:
+        return None, f"invalid validation command: {exc}"
+    if not argv:
+        return None, "validation command is empty"
+    if len(argv) > MAX_VALIDATION_ARGS:
+        return None, f"validation command exceeds {MAX_VALIDATION_ARGS} arguments"
+    if any(arg in SHELL_CONTROL_TOKENS for arg in argv):
+        return None, "validation command contains a shell control operator"
+
+    executable = Path(argv[0]).name
+    if argv[0] != executable or executable not in ALLOWED_VALIDATION_COMMANDS:
+        return None, f"validation executable is not allowed: {argv[0]}"
+    if executable in {"npm", "pnpm", "yarn", "bun"}:
+        if len(argv) < 2 or argv[1] not in {"test", "run"}:
+            return None, f"{executable} validation must use 'test' or 'run'"
+        if argv[1] == "run" and (
+            len(argv) < 3 or argv[2] not in {"check", "lint", "test", "typecheck"}
+        ):
+            return None, f"{executable} run is limited to check, lint, test, or typecheck"
+    if executable in {"python", "python3"} and (
+        len(argv) < 3 or argv[1] != "-m" or argv[2] not in {"compileall", "pytest"}
+    ):
+        return None, "Python validation is limited to '-m compileall' or '-m pytest'"
+    if executable == "cargo" and (len(argv) < 2 or argv[1] not in {"check", "test"}):
+        return None, "cargo validation must use 'check' or 'test'"
+    if executable == "go" and (len(argv) < 2 or argv[1] != "test"):
+        return None, "go validation must use 'test'"
+    return argv, ""
 
 
-    return True
+def run_validation(cmd: str, cwd: Path, timeout: int = 90) -> tuple[bool, str]:
+    """Run a bounded validation command without invoking a shell."""
+    argv, error = _validation_argv(cmd)
+    if argv is None:
+        return False, error
+    executable = shutil.which(argv[0])
+    if executable is None:
+        return False, f"validation executable not found: {argv[0]}"
+    argv[0] = executable
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        return result.returncode == 0, output.strip()[-500:]
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, str(exc)[:500]
 
 
 # ── Skill ↔ file resolution (Claude commands + pi skills) ────────────────────────────

@@ -3,6 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_DIR="${GRAPHITI_INSTALL_DIR:-$HOME/graphiti-memory-personal}"
 VENV_DIR="${GRAPHITI_VENV:-$HOME/.local/share/graphiti-memory-venv}"
+# shellcheck source=/dev/null
 if [ -f "$ROOT/.env" ]; then set -a; source "$ROOT/.env"; set +a; fi
 export CONFIG_PATH="${CONFIG_PATH:-$INSTALL_DIR/mcp_server/config/config.yaml}"
 export NEO4J_URI="${NEO4J_URI:-bolt://localhost:7687}"

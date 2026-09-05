@@ -4,7 +4,6 @@ import subprocess
 import sys
 import types
 from pathlib import Path
-import pytest
 
 ROOT = Path(__file__).parent.parent
 LEARNING = ROOT / "learning"

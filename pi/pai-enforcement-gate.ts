@@ -18,14 +18,24 @@ import {
   mkdirSync,
 } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 const HOME = process.env.HOME!;
-const PAI_DIR = process.env.PAI_DIR || join(HOME, ".claude");
+const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(HOME, ".claude");
 const SCORES_JSON = join(PAI_DIR, "MEMORY", "STATE", "effectiveness_scores.json");
 const CONFIG_JSON = join(PAI_DIR, "MEMORY", "STATE", "enforcement_config.json");
 const ENFORCE_LOG = join(PAI_DIR, "MEMORY", "LEARNING", "enforcement_log.jsonl");
 const TURN_STATE_FILE = join(PAI_DIR, "MEMORY", "STATE", "pi_turn_state.json");
+
+function runPythonHelper(scriptName: string, input: string, timeout: number): string {
+  const script = join(PAI_DIR, "tools", scriptName);
+  return execFileSync("pyenv", ["exec", "python3", script], {
+    input,
+    timeout,
+    encoding: "utf-8",
+    stdio: ["pipe", "pipe", "ignore"],
+  }).trim();
+}
 
 type Mode = "off" | "warn" | "block";
 interface Detector {
@@ -198,12 +208,11 @@ const DETECTORS: Record<string, Detector> = {
         );
       if (!looksTechnical) return null;
       try {
-        const stdout = execSync(
-          "pyenv exec python3 ${HOME}/.claude/tools/adversarial_claim_detector.py",
-          { input: r, timeout: 20000, encoding: "utf-8" }
-        )
-          .toString()
-          .trim();
+        const stdout = runPythonHelper(
+          "adversarial_claim_detector.py",
+          r,
+          20000
+        );
         if (stdout.startsWith("BLOCK:")) {
           return stdout.replace("BLOCK:", "").trim();
         }
@@ -534,13 +543,11 @@ export default function paiEnforcementGate(pi: ExtensionAPI) {
             transcript_path: "",
             evidence,
           });
-          const out = execSync(
-            "pyenv exec python3 ${HOME}/.claude/tools/claim_evidence_verifier.py",
-            { input: payload, timeout: 30000, encoding: "utf-8" }
-          )
-            .toString()
-            .trim()
-            .replace(/^["']+|["']+$/g, "");
+          const out = runPythonHelper(
+            "claim_evidence_verifier.py",
+            payload,
+            30000
+          ).replace(/^["']+|["']+$/g, "");
           if (out.startsWith("BLOCK:")) {
             fires.push({
               pattern: "claim_evidence",

@@ -34,16 +34,14 @@ import json
 import re
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
+from harness_paths import HARNESS_HOME, LESSONS_DIR
 
-HOME = Path.home()
-LESSONS_DIR = HOME / ".claude/projects/-Users-jason-chen/memory"
-SCORES_FILE = HOME / ".claude/MEMORY/STATE/effectiveness_scores.json"
-OUT_JSON = HOME / ".claude/MEMORY/STATE/ace_playbook.json"
-OUT_MD = HOME / ".claude/MEMORY/STATE/ace_playbook.md"
-DIAG = HOME / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
-NEG_FILE = HOME / ".claude/MEMORY/LEARNING/SIGNALS/negative_results.jsonl"
-LEARNING = HOME / ".claude/MEMORY/LEARNING"
+SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
+OUT_JSON = HARNESS_HOME / "MEMORY/STATE/ace_playbook.json"
+OUT_MD = HARNESS_HOME / "MEMORY/STATE/ace_playbook.md"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
+NEG_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/negative_results.jsonl"
+LEARNING = HARNESS_HOME / "MEMORY/LEARNING"
 
 sys.path.insert(0, str(LEARNING))
 from ace_reflector import (  # noqa: E402
@@ -137,7 +135,7 @@ SEED_BULLETS = [
 
 
 def bullet_id(pattern: str, rule: str) -> str:
-    h = hashlib.sha1(f"{pattern}|{rule[:120]}".encode()).hexdigest()[:10]
+    h = hashlib.sha256(f"{pattern}|{rule[:120]}".encode()).hexdigest()[:10]
     return f"b_{pattern[:40]}_{h}"
 
 

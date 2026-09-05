@@ -8,6 +8,43 @@ STATE="$HARNESS_HOME/MEMORY/STATE"
 HOOKS="$HARNESS_HOME/hooks"
 PI_EXT="${HARNESS_PI_EXTENSIONS:-$HOME/.pi/agent/extensions}"
 
+copy_tree() {
+  local src="$1"
+  local dest="$2"
+  local exclude="${3:-}"
+  mkdir -p "$dest"
+  if [ "${HARNESS_FORCE_TAR_COPY:-0}" != "1" ] && command -v rsync >/dev/null 2>&1; then
+    if [ -n "$exclude" ]; then
+      rsync -a --exclude "$exclude" "$src/" "$dest/"
+    else
+      rsync -a "$src/" "$dest/"
+    fi
+  elif command -v tar >/dev/null 2>&1; then
+    if [ -n "$exclude" ]; then
+      (cd "$src" && tar --exclude "$exclude" -cf - .) | (cd "$dest" && tar -xf -)
+    else
+      (cd "$src" && tar -cf - .) | (cd "$dest" && tar -xf -)
+    fi
+  else
+    echo "error: Flywheel installation requires either rsync or tar" >&2
+    return 1
+  fi
+}
+
+for required_dir in learning hooks templates skills config; do
+  if [ ! -d "$ROOT/$required_dir" ]; then
+    echo "error: installer source directory is missing: $ROOT/$required_dir" >&2
+    exit 1
+  fi
+done
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: Python 3.11 or newer is required" >&2
+  exit 1
+fi
+if ! command -v bun >/dev/null 2>&1; then
+  echo "warning: Bun is not installed; TypeScript hooks will not run until Bun is available" >&2
+fi
+
 echo "Installing Flywheel → $HARNESS_HOME"
 
 mkdir -p "$LEARNING" "$STATE" "$LEARNING/SIGNALS" "$LEARNING/DIAGNOSTICS" \
@@ -16,7 +53,7 @@ mkdir -p "$LEARNING" "$STATE" "$LEARNING/SIGNALS" "$LEARNING/DIAGNOSTICS" \
   "$HARNESS_HOME/commands" "$HARNESS_HOME/skills"
 
 # Python loop
-rsync -a --exclude '__pycache__' "$ROOT/learning/" "$LEARNING/"
+copy_tree "$ROOT/learning" "$LEARNING" "__pycache__"
 
 # Config templates (do not overwrite existing)
 for f in model_tiering.md retrieval_sop.md; do
@@ -46,6 +83,13 @@ done
 if [ -d "$ROOT/hooks/lib" ]; then
   mkdir -p "$HOOKS/lib"
   cp "$ROOT/hooks/lib"/* "$HOOKS/lib/" 2>/dev/null || true
+fi
+
+# Hook runtime dependencies are isolated under hooks/node_modules.
+if command -v bun >/dev/null 2>&1 && [ "${HARNESS_SKIP_BUN_INSTALL:-0}" != "1" ]; then
+  cp "$ROOT/package.json" "$ROOT/bun.lock" "$HOOKS/"
+  (cd "$HOOKS" && bun install --production --frozen-lockfile --silent)
+  echo "  installed hook runtime dependencies"
 fi
 
 # Session end
@@ -82,13 +126,13 @@ touch "$STATE/graph_preflight.md"
 # Personal skill pack (portable)
 mkdir -p "$HARNESS_HOME/skills" "$HOME/.agents/skills"
 if [ -d "$ROOT/skills" ]; then
-  rsync -a --exclude 'README.md' "$ROOT/skills/" "$HARNESS_HOME/skills/"
-  rsync -a --exclude 'README.md' "$ROOT/skills/" "$HOME/.agents/skills/" 2>/dev/null || true
+  copy_tree "$ROOT/skills" "$HARNESS_HOME/skills" "README.md"
+  copy_tree "$ROOT/skills" "$HOME/.agents/skills" "README.md" 2>/dev/null || true
   mkdir -p "$HOME/.pi/agent/skills"
   for s in self-improve model-tiering pi-agent instincts caveman thermo-nuclear-code-quality-review; do
     if [ -d "$ROOT/skills/$s" ]; then
       mkdir -p "$HOME/.pi/agent/skills/$s"
-      rsync -a "$ROOT/skills/$s/" "$HOME/.pi/agent/skills/$s/"
+      copy_tree "$ROOT/skills/$s" "$HOME/.pi/agent/skills/$s"
     fi
   done
   echo "  installed personal skills"

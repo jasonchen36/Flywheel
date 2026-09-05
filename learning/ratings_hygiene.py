@@ -14,11 +14,10 @@ import argparse
 import json
 import re
 import shutil
-from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
+from harness_paths import HARNESS_HOME
 
-SIGNALS = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS"
+SIGNALS = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 RATINGS = SIGNALS / "ratings.jsonl"
 BACKUP_DIR = SIGNALS / "backups"
 

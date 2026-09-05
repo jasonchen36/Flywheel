@@ -39,4 +39,8 @@ ratings / FAILURES
 
 ## Paths
 
-`learning/harness_paths.py` centralizes `HARNESS_HOME`. Older scripts still use `~/.claude/MEMORY/...` defaults so a standard install works without edits.
+`learning/harness_paths.py` is the single source of truth for runtime directories. Every Python stage derives mutable state from `HARNESS_HOME`; TypeScript hooks and pi extensions honor `HARNESS_HOME` before the legacy `PAI_DIR` fallback. Optional overrides include `HARNESS_LESSONS_DIR`, `HARNESS_MEETING_DIR`, `HARNESS_SCRUM_DIR`, `HARNESS_PROJECTS_DIR`, `HARNESS_PI_SKILLS`, and `BUNGRAPH_DB`.
+
+## SessionEnd observability
+
+The SessionEnd hook remains non-blocking, but each stage writes a dedicated log and appends an explicit status row under `MEMORY/LEARNING/DIAGNOSTICS/session-end/`. The latest aggregate status is recorded in `latest.tsv`, avoiding collisions between multiple harness installations and making swallowed stage failures visible.

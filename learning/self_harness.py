@@ -33,20 +33,20 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from self_improve import load_all_ratings, classify_entry, RATINGS_FILE  # noqa: E402
 
-HOME = Path.home()
 SURFACES = ROOT / "editable_surfaces.json"
-SCORES = HOME / ".claude/MEMORY/STATE/effectiveness_scores.json"
-LEDGER = HOME / ".claude/MEMORY/STATE/skill_autofix_ledger.json"
-NEG = HOME / ".claude/MEMORY/LEARNING/SIGNALS/negative_results.jsonl"
-DIAG = HOME / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
-ARCHIVE = HOME / ".claude/MEMORY/STATE/harness_candidates.jsonl"
-LESSONS_DIR = HOME / ".claude/MEMORY/lessons"
+SCORES = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
+LEDGER = HARNESS_HOME / "MEMORY/STATE/skill_autofix_ledger.json"
+NEG = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/negative_results.jsonl"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
+ARCHIVE = HARNESS_HOME / "MEMORY/STATE/harness_candidates.jsonl"
+LESSONS_DIR = HARNESS_HOME / "MEMORY/lessons"
 LOW = 4
 
 
@@ -164,7 +164,7 @@ def run_held_out_suite(gate: bool = False) -> dict:
         cmd.append("--gate")
     proc = subprocess.run(cmd, capture_output=True, text=True)
     last = {}
-    last_path = HOME / ".claude/MEMORY/STATE/held_out_suite_last.json"
+    last_path = HARNESS_HOME / "MEMORY/STATE/held_out_suite_last.json"
     if last_path.exists():
         try:
             last = json.loads(last_path.read_text())
@@ -190,7 +190,7 @@ def run_agent_rollouts(gate: bool = False, no_llm: bool = False) -> dict:
         cmd.append("--no-llm")
     proc = subprocess.run(cmd, capture_output=True, text=True)
     last = {}
-    last_path = HOME / ".claude/MEMORY/STATE/agent_rollouts_last.json"
+    last_path = HARNESS_HOME / "MEMORY/STATE/agent_rollouts_last.json"
     if last_path.exists():
         try:
             last = json.loads(last_path.read_text())
@@ -277,7 +277,7 @@ def stage_validate(run_suite: bool = True, run_rollouts: bool = True) -> dict:
     if run_rollouts:
         rollouts = run_agent_rollouts(gate=False, no_llm=False)
     else:
-        last_path = HOME / ".claude/MEMORY/STATE/agent_rollouts_last.json"
+        last_path = HARNESS_HOME / "MEMORY/STATE/agent_rollouts_last.json"
         rollouts = {"summary": {}, "gate": {}, "exit_code": 0}
         if last_path.exists():
             try:
@@ -411,7 +411,7 @@ def main() -> int:
             return 1
         if args.skip_rollouts:
             # Use last agent_rollouts result (session-end already ran them)
-            last_path = HOME / ".claude/MEMORY/STATE/agent_rollouts_last.json"
+            last_path = HARNESS_HOME / "MEMORY/STATE/agent_rollouts_last.json"
             if last_path.exists():
                 try:
                     last = json.loads(last_path.read_text())

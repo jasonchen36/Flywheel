@@ -21,13 +21,13 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME, LESSONS_DIR
 
-HOME = Path.home()
-MEM = HOME / ".claude/projects/-Users-jason-chen/memory"
-STATE = HOME / ".claude/MEMORY/STATE"
+MEM = LESSONS_DIR
+STATE = HARNESS_HOME / "MEMORY/STATE"
 ARCHIVE = STATE / "lesson_archive"
 SCORES = STATE / "effectiveness_scores.json"
-DIAG = HOME / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 
 PROTECTED = frozenset({
     "unverified_completion", "unverified_claims", "incomplete_analysis",

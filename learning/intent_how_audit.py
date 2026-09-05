@@ -15,14 +15,15 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 HOME = Path.home()
 ROOTS = [
-    HOME / ".claude/commands",
+    HARNESS_HOME / "commands",
     HOME / ".agents/skills",
     HOME / ".pi/agent/skills",
 ]
-DIAG = HOME / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 
 # Heuristic: imperative multi-step recipes without outcome framing
 HOW_MARKERS = [

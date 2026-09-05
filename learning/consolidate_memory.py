@@ -26,9 +26,9 @@ from __future__ import annotations
 import argparse
 import difflib
 import re
-from pathlib import Path
+from harness_paths import HARNESS_HOME
 
-MEMORY_DIR = Path.home() / ".claude/MEMORY/lessons"
+MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
 MEMORY_MD = MEMORY_DIR / "MEMORY.md"
 BUDGET = 200
 

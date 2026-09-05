@@ -29,7 +29,7 @@ async function main() {
 
   if (lastResponse) {
     try {
-      const paiDir = process.env.PAI_DIR || join(homedir(), '.claude');
+      const paiDir = process.env.HARNESS_HOME || process.env.PAI_DIR || join(homedir(), '.claude');
       const cachePath = join(paiDir, 'MEMORY', 'STATE', 'last-response.txt');
       writeFileSync(cachePath, lastResponse.slice(0, 2000), 'utf-8');
     } catch (err) {

@@ -25,8 +25,9 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness_paths import HARNESS_HOME, LEARNING, STATE, SIGNALS
-MEM = HARNESS_HOME / "memory"
+from harness_paths import HARNESS_HOME, LEARNING, LESSONS_DIR, STATE, SIGNALS
+
+MEM = LESSONS_DIR
 
 sys.path.insert(0, str(LEARNING))
 try:
@@ -40,13 +41,17 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def load_json(path: Path) -> dict | list | None:
+def load_json_object(path: Path) -> tuple[dict, str | None]:
+    """Load a JSON object and return a diagnostic instead of hiding corruption."""
     if not path.exists():
-        return None
+        return {}, None
     try:
-        return json.loads(path.read_text())
-    except Exception:
-        return None
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return {}, f"invalid JSON in {path.name}: {exc}"
+    if not isinstance(data, dict):
+        return {}, f"invalid state in {path.name}: expected a JSON object"
+    return data, None
 
 
 def main() -> int:
@@ -56,8 +61,15 @@ def main() -> int:
 
     report: dict = {"ts": now_iso(), "checks": {}, "ok": True, "warnings": [], "errors": []}
 
+    def state_object(name: str) -> dict:
+        data, error = load_json_object(STATE / name)
+        if error:
+            report["errors"].append(error)
+            report["ok"] = False
+        return data
+
     # Effectiveness
-    scores = load_json(STATE / "effectiveness_scores.json") or {}
+    scores = state_object("effectiveness_scores.json")
     sc = scores.get("scores") or {}
     escalate = scores.get("escalate") or []
     stale = scores.get("stale_pending") or [
@@ -116,7 +128,7 @@ def main() -> int:
         n_multi = sum(
             1 for e in ents
             if isinstance(getattr(e, "skill_candidates", None), list)
-            and len(getattr(e, "skill_candidates") or []) > 1
+            and len(e.skill_candidates or []) > 1
         )
     skill_non_general_rate = (
         round(n_skill_real / n_ratings, 3) if n_ratings else 0
@@ -216,7 +228,7 @@ def main() -> int:
         report["ok"] = False
 
     # Enforcement config
-    enc = load_json(STATE / "enforcement_config.json") or {}
+    enc = state_object("enforcement_config.json")
     ov = enc.get("overrides") or {}
     report["checks"]["enforcement"] = {
         "enabled": enc.get("enabled", True),
@@ -276,7 +288,7 @@ def main() -> int:
         report["warnings"].append("anti_hallucination.md missing")
 
     # skill_autofix
-    led = load_json(STATE / "skill_autofix_ledger.json") or {}
+    led = state_object("skill_autofix_ledger.json")
     report["checks"]["skill_autofix"] = {
         "active_edits": sum(
             1 for e in led.get("edits", []) if e.get("status") == "active"
@@ -305,8 +317,8 @@ def main() -> int:
         )
 
     # Gates last run
-    suite = load_json(STATE / "held_out_suite_last.json") or {}
-    rolls = load_json(STATE / "agent_rollouts_last.json") or {}
+    suite = state_object("held_out_suite_last.json")
+    rolls = state_object("agent_rollouts_last.json")
     report["checks"]["gates"] = {
         "held_out_suite_gate_pass": (suite.get("gate") or {}).get("gate_pass"),
         "held_out_accept": suite.get("accept"),

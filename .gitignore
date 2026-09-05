@@ -1,5 +1,12 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.audit/
+node_modules/
 .venv/
 *.db
 *.db-shm
@@ -11,11 +18,11 @@ FAILURES/
 .DS_Store
 .env
 *.bak
+*.bak.*
 graphiti_*.jsonl
 ratings.jsonl
 effectiveness_log.jsonl
 lessons_log.jsonl
 enforcement_log.jsonl
-.env
 !.env.example
 graphiti/.env

@@ -29,6 +29,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evals import score_text  # noqa: E402
@@ -36,12 +37,12 @@ from self_improve import call_llm  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 SCENARIOS = ROOT / "held_out_suite" / "fixtures" / "agent_rollouts.json"
-ACE = Path.home() / ".claude/MEMORY/STATE/ace_playbook.json"
-STATE = Path.home() / ".claude/MEMORY/STATE"
-DIAG = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+ACE = HARNESS_HOME / "MEMORY/STATE/ace_playbook.json"
+STATE = HARNESS_HOME / "MEMORY/STATE"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 LAST = STATE / "agent_rollouts_last.json"
 BASELINE = STATE / "agent_rollouts_baseline.json"
-HISTORY = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS" / "agent_rollouts_history.jsonl"
+HISTORY = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS" / "agent_rollouts_history.jsonl"
 TRANSCRIPTS = DIAG / "agent_rollout_transcripts"
 
 
@@ -142,7 +143,7 @@ def aggregate(results: list[dict]) -> dict:
             by_split[sp]["passed"] += 1
         else:
             by_split[sp]["failed"] += 1
-    for sp, d in by_split.items():
+    for _split, d in by_split.items():
         d["pass_rate"] = round(d["passed"] / d["n"], 4) if d["n"] else 0.0
     d_in = by_split.get("in", {"n": 0, "passed": 0, "failed": 0, "pass_rate": 0.0})
     d_out = by_split.get("out", {"n": 0, "passed": 0, "failed": 0, "pass_rate": 0.0})
@@ -298,7 +299,7 @@ def main() -> int:
         elif args.update_baseline and not summary["accept"]:
             # Still allow freeze after intentional review
             BASELINE.write_text(json.dumps(summary, indent=2))
-            print(f"[agent_rollouts] baseline FORCE-updated (suite not clean)")
+            print("[agent_rollouts] baseline FORCE-updated (suite not clean)")
 
     if args.gate:
         if summary["pass_rate"] < args.min_pass_rate:

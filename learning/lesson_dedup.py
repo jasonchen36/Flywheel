@@ -45,11 +45,12 @@ import shutil
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
-MEMORY_DIR = Path.home() / ".claude/MEMORY/lessons"
-DIAGNOSTICS = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
-BACKUP_DIR = Path.home() / ".claude/MEMORY/STATE/lesson_dedup_backups"
+MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
+DIAGNOSTICS = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+BACKUP_DIR = HARNESS_HOME / "MEMORY/STATE/lesson_dedup_backups"
 
 MERGE_THRESHOLD = 0.30   # Jaccard overlap on rule-body tokens
 STOPWORDS = {"this", "that", "with", "from", "have", "will", "your", "what", "when",

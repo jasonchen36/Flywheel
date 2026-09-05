@@ -20,7 +20,7 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
-const PAI_DIR = process.env.PAI_DIR || join(process.env.HOME!, '.claude');
+const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(process.env.HOME!, '.claude');
 const FAILURES_DIR = join(PAI_DIR, 'MEMORY', 'LEARNING', 'FAILURES');
 const LEARNING_DIR = join(PAI_DIR, 'MEMORY', 'LEARNING');
 const MEMORY_DIR = join(PAI_DIR, 'projects', '-USER-', 'memory');

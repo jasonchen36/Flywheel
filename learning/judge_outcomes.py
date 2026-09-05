@@ -43,6 +43,7 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -75,10 +76,10 @@ def _extract_json(raw: str) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 # ── Paths ────────────────────────────────────────────────────────────────────────
-SIGNALS_DIR   = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS"
+SIGNALS_DIR   = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 PENDING_FILE  = SIGNALS_DIR / "pending_judge.jsonl"
 RESULTS_FILE  = SIGNALS_DIR / "judge_results.jsonl"
-DIAG_DIR      = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+DIAG_DIR      = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 
 # ── Bounds ──────────────────────────────────────────────────────────────────────────
 MAX_PER_RUN  = int(os.environ.get("JUDGE_MAX_PER_RUN", "12"))   # turns judged per run
