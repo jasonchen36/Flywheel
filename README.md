@@ -44,7 +44,7 @@ cd graphiti && cp .env.example .env   # add GOOGLE_API_KEY
 
 ## Quick Install
 
-Flywheel requires **Python 3.11+** and **Bun** for TypeScript hooks. The installer uses `rsync` when available and falls back to `tar` automatically.
+Flywheel requires **Python 3.10+** and **Bun** for TypeScript hooks. The installer uses `rsync` when available and falls back to `tar` automatically.
 
 ```bash
 git clone git@github.com:jasonchen36/Flywheel.git
@@ -52,9 +52,10 @@ cd Flywheel
 python3 -m pip install -r requirements.txt
 ./install.sh
 # Custom location: HARNESS_HOME=~/my-flywheel ./install.sh
+# Explicit pi destination: HARNESS_PI_EXTENSIONS=~/.pi/agent/extensions ./install.sh
 ```
 
-The installer is idempotent for seeded state files and backs up existing hooks before replacing them. Then wire hooks from `templates/settings.hooks.snippet.json` into your Claude Code `settings.json`. When using a custom location, export the same `HARNESS_HOME` for the host process; Python stages, hooks, and pi extensions all honor it.
+The installer enforces the Python version floor, seeds state atomically, honors an explicit pi-extension destination even when its parents do not exist, and creates collision-free backups of existing hooks before replacement. Then wire hooks from `templates/settings.hooks.snippet.json` into your Claude Code `settings.json`. When using a custom location, export the same `HARNESS_HOME` for the host process; Python stages, hooks, and pi extensions all honor it.
 
 ---
 
@@ -151,7 +152,7 @@ make install-dev
 make check
 ```
 
-The gate runs Ruff, mypy with Python 3.11 compatibility, Python compilation, the complete branch-aware pytest suite with an 18% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, and validated configuration each require 100% statement and branch coverage. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 26% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, validated configuration, surface permissions, and ratings hygiene each require 100% statement and branch coverage. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 

@@ -16,6 +16,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from harness_paths import HARNESS_HOME
+from state_io import exclusive_lock, load_jsonl_objects, rewrite_jsonl_unlocked
 
 SIGNALS = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 RATINGS = SIGNALS / "ratings.jsonl"
@@ -45,17 +46,7 @@ def is_junk(row: dict) -> bool:
 
 
 def load_rows() -> list[dict]:
-    if not RATINGS.exists():
-        return []
-    out = []
-    for line in RATINGS.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(RATINGS).records
 
 
 def main() -> int:
@@ -92,17 +83,20 @@ def main() -> int:
             f"[ratings_hygiene] WARNING: clean_with_skill_non_general rate "
             f"{skill_rate:.1%} < 30% — skill_autofix cannot target real skills"
         )
-    if args.apply and junk:
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        bak = BACKUP_DIR / f"ratings.jsonl.{stamp}.bak"
-        shutil.copy2(RATINGS, bak)
-        with RATINGS.open("w") as f:
-            for r in clean:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        print(f"rewrote {RATINGS} clean={len(clean)} backup={bak}")
+    if args.apply:
+        with exclusive_lock(RATINGS):
+            current_rows = load_rows()
+            current_clean = [row for row in current_rows if not is_junk(row)]
+            current_junk = [row for row in current_rows if is_junk(row)]
+            if current_junk:
+                BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                bak = BACKUP_DIR / f"ratings.jsonl.{stamp}.bak"
+                shutil.copy2(RATINGS, bak)
+                rewrite_jsonl_unlocked(RATINGS, current_clean)
+                print(f"rewrote {RATINGS} clean={len(current_clean)} backup={bak}")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

@@ -13,6 +13,8 @@ sys.path.insert(0, str(LEARNING))
 import state_io
 from state_io import (
     append_jsonl,
+    append_jsonl_many,
+    append_jsonl_many_unlocked,
     append_jsonl_unlocked,
     atomic_write_json,
     atomic_write_text,
@@ -119,6 +121,15 @@ def test_rewrite_and_append_jsonl_round_trip(tmp_path: Path):
     ]
     rewrite_jsonl(path, [])
     assert path.read_text() == ""
+
+
+def test_batch_append_round_trip_and_empty_batch(tmp_path: Path):
+    path = tmp_path / "events.jsonl"
+    append_jsonl_many(path, [{"id": 1}, {"id": 2}])
+    append_jsonl_many_unlocked(path, [{"id": 3}, {"id": 4}])
+    append_jsonl_many(path, [])
+    append_jsonl_many_unlocked(path, [])
+    assert [row["id"] for row in load_jsonl_objects(path).records] == [1, 2, 3, 4]
 
 
 def test_append_without_fcntl_uses_portable_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

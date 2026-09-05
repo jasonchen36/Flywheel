@@ -6,6 +6,7 @@ HARNESS_HOME="${HARNESS_HOME:-$HOME/.claude}"
 LEARNING="$HARNESS_HOME/MEMORY/LEARNING"
 STATE="$HARNESS_HOME/MEMORY/STATE"
 HOOKS="$HARNESS_HOME/hooks"
+PI_EXT_EXPLICIT="${HARNESS_PI_EXTENSIONS+x}"
 PI_EXT="${HARNESS_PI_EXTENSIONS:-$HOME/.pi/agent/extensions}"
 
 copy_tree() {
@@ -38,7 +39,15 @@ for required_dir in learning hooks templates skills config; do
   fi
 done
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "error: Python 3.11 or newer is required" >&2
+  echo "error: Python 3.10 or newer is required" >&2
+  exit 1
+fi
+if ! python3 - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 10) else 1)
+PY
+then
+  echo "error: Python 3.10 or newer is required (found $(python3 --version 2>&1))" >&2
   exit 1
 fi
 if ! command -v bun >/dev/null 2>&1; then
@@ -76,7 +85,7 @@ for f in "$ROOT/hooks"/*.ts; do
   base=$(basename "$f")
   dest="$HOOKS/$base"
   if [ -f "$dest" ]; then
-    cp "$dest" "$dest.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+    cp "$dest" "$dest.bak.$(date +%Y%m%d%H%M%S).$$" 2>/dev/null || true
   fi
   cp "$f" "$dest"
 done
@@ -102,17 +111,27 @@ cp "$ROOT/skills/self-improve/SKILL.md" "$HARNESS_HOME/skills/self-improve/"
 cp "$ROOT/skills/model-tiering/SKILL.md" "$HARNESS_HOME/skills/model-tiering/"
 cp "$ROOT/skills/self-improve/SKILL.md" "$HARNESS_HOME/commands/self-improve.md" 2>/dev/null || true
 
-# Pi extensions (optional)
-if [ -d "$(dirname "$PI_EXT")" ]; then
+# Pi extensions are optional by default, but an explicit destination is authoritative.
+if [ "$PI_EXT_EXPLICIT" = "x" ] || [ -d "$(dirname "$PI_EXT")" ]; then
   mkdir -p "$PI_EXT"
   cp "$ROOT/pi/"*.ts "$PI_EXT/"
   echo "  installed pi extensions → $PI_EXT"
 fi
 
-# Seed empty STATE files
-[ -f "$STATE/enforcement_config.json" ] || echo '{"enabled":true,"overrides":{}}' > "$STATE/enforcement_config.json"
-[ -f "$STATE/effectiveness_scores.json" ] || echo '{"scores":{},"escalate":[]}' > "$STATE/effectiveness_scores.json"
-[ -f "$STATE/ace_playbook.json" ] || echo '{"bullets":[],"bullet_count":0}' > "$STATE/ace_playbook.json"
+seed_state() {
+  local path="$1"
+  local content="$2"
+  local temporary
+  [ -f "$path" ] && return 0
+  temporary="$path.tmp.$$"
+  printf '%s\n' "$content" > "$temporary"
+  mv "$temporary" "$path"
+}
+
+# Seed empty STATE files without exposing partial JSON to concurrent hooks.
+seed_state "$STATE/enforcement_config.json" '{"enabled":true,"overrides":{}}'
+seed_state "$STATE/effectiveness_scores.json" '{"scores":{},"escalate":[]}'
+seed_state "$STATE/ace_playbook.json" '{"bullets":[],"bullet_count":0}'
 touch "$LEARNING/SIGNALS/ratings.jsonl"
 # Portable knowledge pack
 cp "$ROOT/docs/principles.md" "$STATE/principles.md"

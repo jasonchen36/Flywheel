@@ -27,6 +27,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import append_jsonl, atomic_write_json, atomic_write_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evals import EVALS, score_text  # noqa: E402
@@ -185,7 +186,7 @@ def write_report(summary: dict, gate: dict | None) -> Path:
             f"- **gate_pass: {gate.get('gate_pass')}**",
         ]
     lines.append("")
-    path.write_text("\n".join(lines))
+    atomic_write_text(path, "\n".join(lines))
     return path
 
 
@@ -228,22 +229,20 @@ def main() -> int:
 
     if not args.dry_run:
         STATE.mkdir(parents=True, exist_ok=True)
-        LAST_FILE.write_text(json.dumps({"summary": summary, "gate": gate}, indent=2))
+        atomic_write_json(LAST_FILE, {"summary": summary, "gate": gate})
         report = write_report(summary, gate)
         print(f"[held_out_suite] report → {report}")
-        HISTORY.parent.mkdir(parents=True, exist_ok=True)
-        with open(HISTORY, "a") as f:
-            f.write(json.dumps({
-                "ts": summary["ts"],
-                "d_in_rate": summary["d_in"]["pass_rate"],
-                "d_out_rate": summary["d_out"]["pass_rate"],
-                "accept": summary["accept"],
-                "gate_pass": (gate or {}).get("gate_pass"),
-            }) + "\n")
+        append_jsonl(HISTORY, {
+            "ts": summary["ts"],
+            "d_in_rate": summary["d_in"]["pass_rate"],
+            "d_out_rate": summary["d_out"]["pass_rate"],
+            "accept": summary["accept"],
+            "gate_pass": (gate or {}).get("gate_pass"),
+        })
         if args.update_baseline or not BASELINE_FILE.exists():
             # First run auto-baselines if suite is clean; --update-baseline always freezes.
             if args.update_baseline or summary["accept"]:
-                BASELINE_FILE.write_text(json.dumps(summary, indent=2))
+                atomic_write_json(BASELINE_FILE, summary)
                 print(f"[held_out_suite] baseline → {BASELINE_FILE}")
             else:
                 print("[held_out_suite] baseline NOT updated (suite not clean; fix fixtures/evals first)")

@@ -47,11 +47,11 @@ Stages are intentionally sequential. The small loss in wall-clock parallelism pr
 
 ## Paths
 
-`learning/harness_paths.py` is the single source of truth for runtime directories. Every Python stage derives mutable state from `HARNESS_HOME`; TypeScript hooks and pi extensions honor `HARNESS_HOME` before the legacy `PAI_DIR` fallback. Optional overrides include `HARNESS_LESSONS_DIR`, `HARNESS_MEETING_DIR`, `HARNESS_SCRUM_DIR`, `HARNESS_PROJECTS_DIR`, `HARNESS_PI_SKILLS`, and `BUNGRAPH_DB`.
+`learning/harness_paths.py` is the single source of truth for runtime directories. Every Python stage derives mutable state from `HARNESS_HOME`; TypeScript hooks and pi extensions honor `HARNESS_HOME` before the legacy `PAI_DIR` fallback. Optional overrides include `HARNESS_LESSONS_DIR`, `HARNESS_MEETING_DIR`, `HARNESS_SCRUM_DIR`, `HARNESS_PROJECTS_DIR`, `HARNESS_PI_SKILLS`, and `BUNGRAPH_DB`. The surface gate accepts the shipped exact-`path` and `glob` rule forms, maps default Claude and pi skill prefixes onto these custom roots, validates policy structure, and fails closed on missing or malformed policy data.
 
 ## Durable state I/O
 
-`learning/state_io.py` owns reusable state operations. Whole-file updates use same-directory temporary files, `fsync`, and atomic replacement; JSONL readers isolate malformed rows; JSONL appenders coordinate through stable sidecar locks. Queue producers that update both Graphiti pending work and an ingestion ledger acquire both locks in sorted order and re-check the ledger inside the transaction.
+`learning/state_io.py` owns reusable state operations. Whole-file updates use same-directory temporary files, `fsync`, and atomic replacement; JSONL readers isolate malformed rows; single and batched JSONL appenders coordinate through stable sidecar locks. Queue producers that update both Graphiti pending work and an ingestion ledger acquire both locks in sorted order and re-check the ledger inside the transaction. Held-out state, ACE outputs, evaluation registries, judge queues, skill-autofix state, lessons, reports, and changelog snapshots use these same durable boundaries rather than direct mutable-state writes.
 
 ## Transactional review workflow
 
@@ -63,6 +63,6 @@ The SessionEnd hook remains non-blocking, but each stage writes a dedicated log 
 
 ## Quality thresholds
 
-The complete test command enforces an 18% branch-aware repository coverage floor, up from the third-pass baseline of 11%. Shared durable state, transactional review, and validated configuration modules independently require 100% statement and branch coverage.
+The complete test command enforces a 26% branch-aware repository coverage floor, up from the third-pass baseline of 11%. Shared durable state, transactional review, validated configuration, surface permissions, and ratings hygiene independently require 100% statement and branch coverage. Healthcheck's operational decision paths are directly regression-tested across healthy, stale, corrupt, missing, and degraded installations.
 
 `held_out_suite.py --gate` is the deterministic behavioral gate. `agent_rollouts.py --gate` is a live-provider semantic supplement: empty responses or provider exceptions are recorded as skipped infrastructure checks, persisted in the latest diagnostic report, and never misclassified as harness behavior failures or written into performance history.

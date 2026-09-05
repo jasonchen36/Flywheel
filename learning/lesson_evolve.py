@@ -57,7 +57,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
 from review_store import enqueue_pending, load_reviews
-from state_io import append_jsonl, load_jsonl_objects
+from state_io import (
+    append_jsonl_many,
+    atomic_write_text,
+    exclusive_lock,
+    load_jsonl_objects,
+    rewrite_jsonl_unlocked,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import call_llm, _apply_pai_settings_env, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
@@ -98,8 +104,7 @@ def load_variants() -> list[dict]:
 
 
 def append_variants(records: list[dict]) -> None:
-    for record in records:
-        append_jsonl(VARIANTS_FILE, record)
+    append_jsonl_many(VARIANTS_FILE, records)
 
 
 def last_mutation_date(variants: list[dict], pattern: str) -> str | None:
@@ -184,8 +189,7 @@ def main() -> int:
         lines.append("No lessons currently flat/regressed and past cooldown.")
         report = "\n".join(lines) + "\n"
         print(report)
-        DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-        (DIAGNOSTICS / f"lesson_evolve_{today}.md").write_text(report)
+        atomic_write_text(DIAGNOSTICS / f"lesson_evolve_{today}.md", report)
         return 0
 
     review_records = load_review_queue()
@@ -228,8 +232,7 @@ def main() -> int:
 
     report = "\n".join(lines) + "\n"
     print(report)
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-    (DIAGNOSTICS / f"lesson_evolve_{today}.md").write_text(report)
+    atomic_write_text(DIAGNOSTICS / f"lesson_evolve_{today}.md", report)
 
     if new_variant_records:
         append_variants(new_variant_records)
@@ -241,67 +244,58 @@ def main() -> int:
 
 
 def apply_variant(pattern: str, variant_id: int, today: str) -> bool:
-    """Approving a lesson_evolve record: swap the lesson's rule paragraph for the chosen
-    variant text. Preserves frontmatter/evidence/occurrence_count; bumps last_updated
-    (intentional — resets the effectiveness before/after window for the new phrasing).
-    Called by review_queue.py."""
-    variants = load_variants()
-    match = next((v for v in variants
-                 if v["pattern"] == pattern and v["variant_id"] == variant_id
-                 and v["status"] == "proposed"), None)
-    if not match:
-        # fall back to most recent proposal for this pattern+variant even if already applied
-        # once before (re-approving after a later regression is a legitimate retry)
-        match = next((v for v in reversed(variants)
-                     if v["pattern"] == pattern and v["variant_id"] == variant_id), None)
-    if not match:
-        print(f"WARNING: no variant {variant_id} found for pattern '{pattern}'. No change made.")
-        return False
+    """Apply one proposed lesson variant and update its ledger transactionally."""
+    with exclusive_lock(VARIANTS_FILE):
+        variants = load_variants()
+        match = next((v for v in variants
+                     if v["pattern"] == pattern and v["variant_id"] == variant_id
+                     and v["status"] == "proposed"), None)
+        if not match:
+            # Re-approving after a later regression is a legitimate retry.
+            match = next((v for v in reversed(variants)
+                         if v["pattern"] == pattern and v["variant_id"] == variant_id), None)
+        if not match:
+            print(f"WARNING: no variant {variant_id} found for pattern '{pattern}'. No change made.")
+            return False
 
-    path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
-    if not path.exists():
-        print(f"WARNING: lesson_autogen_{pattern}.md not found. No change made.")
-        return False
+        path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
+        if not path.exists():
+            print(f"WARNING: lesson_autogen_{pattern}.md not found. No change made.")
+            return False
 
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    backup_path = BACKUP_DIR / f"{pattern}_{today}.md"
-    shutil.copy2(path, backup_path)
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_path = BACKUP_DIR / f"{pattern}_{today}.md"
+        shutil.copy2(path, backup_path)
 
-    txt = path.read_text()
-    parts = txt.split("---", 2)
-    if len(parts) < 3:
-        print(f"WARNING: {path.name} missing frontmatter structure. No change made.")
-        return False
-    frontmatter, body = parts[1], parts[2].lstrip("\n")
-    body_parts = body.split("\n\n", 1)
-    rest = body_parts[1] if len(body_parts) > 1 else ""
-    new_body = match["text"].strip() + "\n\n" + rest
+        txt = path.read_text()
+        parts = txt.split("---", 2)
+        if len(parts) < 3:
+            print(f"WARNING: {path.name} missing frontmatter structure. No change made.")
+            return False
+        frontmatter, body = parts[1], parts[2].lstrip("\n")
+        body_parts = body.split("\n\n", 1)
+        rest = body_parts[1] if len(body_parts) > 1 else ""
+        new_body = match["text"].strip() + "\n\n" + rest
 
-    # Preserve first_seen (measurement anchor). Only bump last_updated for content freshness.
-    if re.search(r"^\s*first_seen:\s*\d{4}-\d{2}-\d{2}", frontmatter, re.M):
-        pass  # keep existing first_seen
-    else:
-        # Derive from previous last_updated if present, else today
-        m_old = re.search(r"last_updated:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
-        fs = m_old.group(1) if m_old else today
+        # Preserve first_seen (measurement anchor). Only bump last_updated.
+        if not re.search(r"^\s*first_seen:\s*\d{4}-\d{2}-\d{2}", frontmatter, re.M):
+            m_old = re.search(r"last_updated:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
+            first_seen = m_old.group(1) if m_old else today
+            frontmatter = re.sub(
+                r"(pattern:\s*\S+\n)",
+                rf"\1  first_seen: {first_seen}\n",
+                frontmatter,
+                count=1,
+            )
         frontmatter = re.sub(
-            r"(pattern:\s*\S+\n)",
-            rf"\1  first_seen: {fs}\n",
-            frontmatter,
-            count=1,
+            r"(last_updated:\s*)\d{4}-\d{2}-\d{2}", rf"\g<1>{today}", frontmatter
         )
-    frontmatter = re.sub(r"(last_updated:\s*)\d{4}-\d{2}-\d{2}", rf"\g<1>{today}", frontmatter)
+        atomic_write_text(path, "---" + frontmatter + "---\n\n" + new_body)
 
-    new_txt = "---" + frontmatter + "---\n\n" + new_body
-    path.write_text(new_txt)
-
-    # Mark all proposals for this pattern+variant_id applied (idempotent history).
-    for v in variants:
-        if v["pattern"] == pattern and v["variant_id"] == variant_id:
-            v["status"] = "applied"
-    with open(VARIANTS_FILE, "w") as f:
-        for v in variants:
-            f.write(json.dumps(v) + "\n")
+        for variant in variants:
+            if variant["pattern"] == pattern and variant["variant_id"] == variant_id:
+                variant["status"] = "applied"
+        rewrite_jsonl_unlocked(VARIANTS_FILE, variants)
 
     print(f"Applied variant {variant_id} to lesson_autogen_{pattern}.md "
           f"(backup: {backup_path}). last_updated bumped to {today}; "

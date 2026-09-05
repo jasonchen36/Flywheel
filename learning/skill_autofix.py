@@ -43,6 +43,7 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from harness_paths import COMMANDS, DIAGNOSTICS, PI_SKILLS, STATE
+from state_io import atomic_write_json, atomic_write_text
 
 # Shared primitives — same cross-import discipline the rest of the loop uses (zero drift).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -118,7 +119,7 @@ def _snap_name(skill: str, surface: str) -> str:
 def snapshot(skill: str, live: Path, msg: str, surface: str = "claude") -> str:
     """Mirror the live skill file into the repo and commit. Returns the commit hash."""
     name = _snap_name(skill, surface)
-    (SNAP_REPO / name).write_text(live.read_text())
+    atomic_write_text(SNAP_REPO / name, live.read_text())
     _git("add", "-f", name)
     _git("commit", "-q", "-m", msg, "--allow-empty")
     return _git("rev-parse", "HEAD")
@@ -356,8 +357,7 @@ def load_ledger() -> dict:
 
 
 def save_ledger(ledger: dict) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    LEDGER_FILE.write_text(json.dumps(ledger, indent=2))
+    atomic_write_json(LEDGER_FILE, ledger)
 
 
 def active_edit_for(ledger: dict, skill: str) -> dict | None:
@@ -454,7 +454,9 @@ def evaluate_active(ledger: dict, entries: list, today: str,
             live = resolved[0] if resolved else None
             surface = (resolved[1] if resolved else surface)
             if live and not dry_run:
-                live.write_text(content_at(ed["skill"], ed["commit_before"], surface))
+                atomic_write_text(
+                    live, content_at(ed["skill"], ed["commit_before"], surface)
+                )
                 snapshot(ed["skill"], live,
                          f"revert /{ed['skill']} — {v} post={rate:.2f} base={ed['baseline_fail_rate']:.2f}",
                          surface=surface)
@@ -518,7 +520,7 @@ def propose_new(ledger: dict, entries: list, today: str, changes: list[str],
         commit_before = snapshot(skill, live, f"before autofix /{skill} ({pattern})", surface=surface)
         new_content = upsert_section(live.read_text(), block)
         if validate_skill_content(new_content):
-            live.write_text(new_content)
+            atomic_write_text(live, new_content)
             commit_after = snapshot(skill, live, f"autofix /{skill} ({pattern})", surface=surface)
             ok, validation_note = True, ""
             if validation_cmd:
@@ -527,7 +529,7 @@ def propose_new(ledger: dict, entries: list, today: str, changes: list[str],
                     # Contract not met → revert the edit, keep the record for audit.
                     prior = content_at(skill, commit_before, surface=surface)
                     if prior is not None:
-                        live.write_text(prior)
+                        atomic_write_text(live, prior)
                     commit_after = snapshot(skill, live, f"revert /{skill} ({pattern}) validation-failed", surface=surface)
             ledger["edits"].append({
                 "skill": skill, "pattern": pattern, "surface": surface,
@@ -681,8 +683,7 @@ def main() -> int:
     if changes:
         ledger.setdefault("log", []).append({"date": today, "changes": changes})
     save_ledger(ledger)
-    DIAG_DIR.mkdir(parents=True, exist_ok=True)
-    (DIAG_DIR / f"skill_autofix_{today}.md").write_text(report)
+    atomic_write_text(DIAG_DIR / f"skill_autofix_{today}.md", report)
     print(f"Wrote: {LEDGER_FILE}")
     print(f"Wrote: {DIAG_DIR / f'skill_autofix_{today}.md'}")
     # Exit 2 = suite blocked applies (caller can distinguish from hard crash)

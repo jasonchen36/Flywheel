@@ -34,7 +34,7 @@ from pathlib import Path
 from harness_paths import HARNESS_HOME, LESSONS_DIR
 from typing import Any, Optional
 
-from state_io import load_jsonl_objects
+from state_io import append_jsonl, atomic_write_text, load_jsonl_objects
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -976,9 +976,7 @@ def append_eval_candidate(pattern: str, suggested: dict, dry_run: bool = False) 
         "predicate": suggested.get("predicate", ""),
         "status": "proposed",
     }
-    EVAL_CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(EVAL_CANDIDATES_FILE, "a") as f:
-        f.write(json.dumps(rec) + "\n")
+    append_jsonl(EVAL_CANDIDATES_FILE, rec)
 
 
 def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict[str, str]:
@@ -1030,7 +1028,6 @@ def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict
 
 
 def _append_other_reclass(entry: RatingEntry, patterns: list[str], source: str) -> None:
-    OTHER_RECLASS_FILE.parent.mkdir(parents=True, exist_ok=True)
     rec = {
         "timestamp": entry.timestamp,
         "session_id": entry.session_id,
@@ -1039,8 +1036,7 @@ def _append_other_reclass(entry: RatingEntry, patterns: list[str], source: str) 
         "rating": entry.rating,
         "summary": (entry.sentiment_summary or "")[:160],
     }
-    with open(OTHER_RECLASS_FILE, "a") as f:
-        f.write(json.dumps(rec) + "\n")
+    append_jsonl(OTHER_RECLASS_FILE, rec)
     global _RECLASS_CACHE
     _RECLASS_CACHE = None  # invalidate
 
@@ -1179,7 +1175,7 @@ metadata:
 
     if not dry_run:
         if validate_lesson_format(content):
-            filepath.write_text(content)
+            atomic_write_text(filepath, content)
         else:
             print(f"[validation-error] Deferred writing lesson file '{filepath.name}' due to failed format validation")
     return filepath
@@ -1201,7 +1197,7 @@ def update_memory_index(new_entries: list[tuple[str, Path]], memory_dir: Path, d
             content += line
             added += 1
     if not dry_run and added > 0:
-        index_path.write_text(content)
+        atomic_write_text(index_path, content)
     return added
 
 
@@ -1286,8 +1282,7 @@ def generate_report(
 See `lessons_log.jsonl` for per-run history.
 """
     if not dry_run:
-        report_dir.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(content)
+        atomic_write_text(report_path, content)
     return report_path
 
 
@@ -1301,8 +1296,7 @@ def log_run(pattern_data: dict, lessons_log: Path):
             for p, d in pattern_data.items()
         },
     }
-    with open(lessons_log, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    append_jsonl(lessons_log, entry)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
