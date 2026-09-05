@@ -24,34 +24,26 @@ import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
 from harness_paths import HARNESS_HOME, LEARNING, LESSONS_DIR, STATE, SIGNALS
+from state_io import try_read_json_object as load_json_object
 
 MEM = LESSONS_DIR
 
 sys.path.insert(0, str(LEARNING))
 try:
-    from self_improve import load_all_ratings, RATINGS_FILE
+    from self_improve import RATINGS_FILE, load_all_ratings
+    rating_loader: Callable[[Path], list[Any]] = load_all_ratings
 except Exception:
-    load_all_ratings = None  # type: ignore
     RATINGS_FILE = SIGNALS / "ratings.jsonl"
+
+    def rating_loader(_path: Path) -> list[Any]:
+        return []
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def load_json_object(path: Path) -> tuple[dict, str | None]:
-    """Load a JSON object and return a diagnostic instead of hiding corruption."""
-    if not path.exists():
-        return {}, None
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        return {}, f"invalid JSON in {path.name}: {exc}"
-    if not isinstance(data, dict):
-        return {}, f"invalid state in {path.name}: expected a JSON object"
-    return data, None
 
 
 def main() -> int:
@@ -117,8 +109,8 @@ def main() -> int:
 
     # Ratings attribution (primary skill + multi-label candidates)
     n_ratings = n_skill = n_skill_real = n_agent = n_multi = 0
-    if load_all_ratings and Path(RATINGS_FILE).exists():
-        ents = load_all_ratings(Path(RATINGS_FILE))
+    if Path(RATINGS_FILE).exists():
+        ents = rating_loader(Path(RATINGS_FILE))
         n_ratings = len(ents)
         n_skill = sum(1 for e in ents if e.skill)
         n_skill_real = sum(
@@ -275,8 +267,8 @@ def main() -> int:
                 "completion_without_artifact", {}
             ).get("passed"),
         }
-    except Exception as e:
-        report["warnings"].append(f"detector probe skipped: {e}")
+    except Exception as exc:
+        report["warnings"].append(f"detector probe skipped: {exc}")
 
     # anti_hallucination brief present
     ah = STATE / "anti_hallucination.md"
@@ -299,16 +291,16 @@ def main() -> int:
     # no post-apply traffic exists for the skill (or the sensor is dark).
     today = datetime.now(timezone.utc).date()
     stalled = []
-    for e in led.get("edits", []):
-        if e.get("status") != "active":
+    for edit in led.get("edits", []):
+        if edit.get("status") != "active":
             continue
         try:
-            applied = datetime.strptime(str(e.get("applied", ""))[:10], "%Y-%m-%d").date()
+            applied = datetime.strptime(str(edit.get("applied", ""))[:10], "%Y-%m-%d").date()
         except ValueError:
             continue
         age = (today - applied).days
-        if age > 14 and not e.get("post_n"):
-            stalled.append(f"/{e.get('skill')}:{e.get('pattern')} ({age}d)")
+        if age > 14 and not edit.get("post_n"):
+            stalled.append(f"/{edit.get('skill')}:{edit.get('pattern')} ({age}d)")
     report["checks"]["skill_autofix"]["burnin_stalled"] = stalled
     if stalled:
         report["warnings"].append(
@@ -362,8 +354,8 @@ def main() -> int:
                 print(f"  - {w}")
         if report["errors"]:
             print("\nErrors:")
-            for e in report["errors"]:
-                print(f"  - {e}")
+            for error in report["errors"]:
+                print(f"  - {error}")
     return 0 if report["ok"] else 1
 
 

@@ -25,6 +25,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import DIAGNOSTICS, PROJECTS_DIR, STATE
+from state_io import append_jsonl, atomic_write_json
 
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 LAST_RESPONSE = STATE / "last-response.txt"
@@ -217,9 +218,7 @@ def queue_episode(name: str, body: str, source_description: str, dry: bool) -> N
     if dry:
         print(f"[dry-run] would queue {name} ({len(body)} chars)")
         return
-    STATE.mkdir(parents=True, exist_ok=True)
-    with PENDING.open("a") as f:
-        f.write(json.dumps(rec) + "\n")
+    append_jsonl(PENDING, rec)
 
 
 def already_queued_similar(body: str) -> bool:
@@ -329,11 +328,8 @@ def main() -> int:
     if not candidates:
         report["skipped"].append("no_candidates")
 
-    DIAG.mkdir(parents=True, exist_ok=True)
     if not args.dry_run:
-        (DIAG / f"session_graphiti_autoseed_{today()}.json").write_text(
-            json.dumps(report, indent=2)
-        )
+        atomic_write_json(DIAG / f"session_graphiti_autoseed_{today()}.json", report)
     print(json.dumps(report, indent=2))
     return 0
 

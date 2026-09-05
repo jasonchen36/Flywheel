@@ -34,6 +34,8 @@ import json
 import re
 import sys
 from datetime import datetime, timezone
+from typing import Any, TypedDict
+
 from harness_paths import HARNESS_HOME, LESSONS_DIR
 
 SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
@@ -77,9 +79,16 @@ SLUDGE_RES = [
     re.compile(r"^check this rule\.?$", re.I),
 ]
 
+class SeedBullet(TypedDict):
+    pattern: str
+    description: str
+    priority: int
+    section: str
+
+
 # Fixed anti-hallucination seed bullets — always kept at top of strategy section.
 # Not derived from lessons; closed-loop guards that must survive ACE rebuilds.
-SEED_BULLETS = [
+SEED_BULLETS: list[SeedBullet] = [
     {
         "pattern": "unverified_completion",
         "description": (
@@ -139,7 +148,7 @@ def bullet_id(pattern: str, rule: str) -> str:
     return f"b_{pattern[:40]}_{h}"
 
 
-def load_scores() -> dict:
+def load_scores() -> dict[str, dict[str, Any]]:
     if not SCORES_FILE.exists():
         return {}
     try:
@@ -148,9 +157,9 @@ def load_scores() -> dict:
         return {}
 
 
-def load_lessons(use_llm: bool = False) -> list[dict]:
+def load_lessons(use_llm: bool = False) -> list[dict[str, Any]]:
     """Load lessons and run Reflector on each (weak → upgraded description)."""
-    out = []
+    out: list[dict[str, Any]] = []
     if not LESSONS_DIR.exists():
         return out
     for p in sorted(LESSONS_DIR.glob("lesson_autogen_*.md")):
@@ -290,11 +299,13 @@ def _injection_section(verdict: str, ace_section: str, quality: int, min_quality
     return "strategy"
 
 
-def build_playbook(max_bullets: int, min_quality: int = 2, use_llm: bool = False) -> dict:
+def build_playbook(
+    max_bullets: int, min_quality: int = 2, use_llm: bool = False
+) -> dict[str, Any]:
     scores = load_scores()
     lessons = load_lessons(use_llm=use_llm)
-    bullets: list[dict] = []
-    stats = {
+    bullets: list[dict[str, Any]] = []
+    stats: dict[str, Any] = {
         "lessons_in": len(lessons),
         "weak_input": 0,
         "reflected": 0,

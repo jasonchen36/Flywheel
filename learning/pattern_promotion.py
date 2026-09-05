@@ -46,6 +46,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -102,10 +103,7 @@ def load_review_queue() -> list[dict]:
 
 
 def write_review_queue(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(REVIEW_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def suggest_keywords(label: str, summaries: list[str], top_n: int = 6) -> list[str]:
@@ -114,7 +112,7 @@ def suggest_keywords(label: str, summaries: list[str], top_n: int = 6) -> list[s
     reviews/edits this list in the review-queue note before it's appended to
     PATTERN_KEYWORDS — never auto-applied blind."""
     label_words = [w for w in label.split("_") if w]
-    toks = Counter()
+    toks: Counter[str] = Counter()
     for s in summaries:
         for w in re.findall(r"[a-z]+", s.lower()):
             if len(w) > 3 and w not in STOPWORDS:
@@ -149,11 +147,11 @@ def main() -> int:
     by_session = {r["session_id"]: r for r in ledger}
     id_to_entry = {e.session_id: e for e in other_entries}
     for sid, label in label_map.items():
-        e = id_to_entry.get(sid)
+        representative = id_to_entry.get(sid)
         by_session[sid] = {
             "session_id": sid, "label": label, "labeled_at": today,
-            "sentiment_summary": e.sentiment_summary if e else "",
-            "rating": e.rating if e else None,
+            "sentiment_summary": representative.sentiment_summary if representative else "",
+            "rating": representative.rating if representative else None,
             "status": by_session.get(sid, {}).get("status", "pending"),
         }
     new_ledger = list(by_session.values())

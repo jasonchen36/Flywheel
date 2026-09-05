@@ -26,6 +26,13 @@ import urllib.request
 from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone
 from harness_paths import GRAPHITI_MCP_URL, HARNESS_HOME
+from state_io import (
+    append_jsonl,
+    atomic_write_json,
+    exclusive_lock,
+    load_jsonl_objects,
+    rewrite_jsonl_unlocked,
+)
 
 STATE = HARNESS_HOME / "MEMORY/STATE"
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
@@ -186,17 +193,7 @@ class GraphitiMCPHttp:
 
 
 def load_pending() -> list[dict]:
-    if not PENDING.exists():
-        return []
-    out: list[dict] = []
-    for line in PENDING.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(PENDING).records
 
 
 def dedupe_latest(rows: list[dict]) -> list[dict]:
@@ -214,108 +211,99 @@ def dedupe_latest(rows: list[dict]) -> list[dict]:
 
 
 def append_archive(rows: list[dict]) -> None:
-    if not rows:
-        return
-    STATE.mkdir(parents=True, exist_ok=True)
-    with ARCHIVE.open("a") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    for row in rows:
+        append_jsonl(ARCHIVE, row)
 
 
 def rewrite_pending(remaining: list[dict]) -> None:
-    STATE.mkdir(parents=True, exist_ok=True)
-    if not remaining:
-        if PENDING.exists():
-            PENDING.write_text("")
-        return
-    PENDING.write_text("\n".join(json.dumps(r) for r in remaining) + "\n")
+    rewrite_jsonl_unlocked(PENDING, remaining)
+
+
+def flush_pending(args: argparse.Namespace) -> int:
+    """Drain the queue while excluding cooperating producers and rewriters."""
+    with exclusive_lock(PENDING):
+        rows = load_pending()
+        todo = dedupe_latest(rows)[: args.limit]
+        report = {
+            "ts": now_iso(),
+            "url": args.url,
+            "queued": len(rows),
+            "to_flush": len(todo),
+            "flushed": [],
+            "failed": [],
+            "skipped": 0,
+        }
+
+        if not todo:
+            print(json.dumps({**report, "message": "queue empty"}, indent=2))
+            return 0
+
+        if args.dry_run:
+            report["dry_run_names"] = [row.get("name") for row in todo]
+            print(json.dumps(report, indent=2))
+            return 0
+
+        try:
+            client = GraphitiMCPHttp(url=args.url)
+            client.connect()
+        except Exception as exc:
+            report["error"] = f"connect_failed: {exc}"
+            print(json.dumps(report, indent=2))
+            return 2
+
+        ok_rows: list[dict] = []
+        failed_rows: list[dict] = []
+        for row in todo:
+            name = row.get("name") or "unnamed"
+            try:
+                client.add_memory(
+                    name=name,
+                    episode_body=row.get("episode_body") or "",
+                    group_id=row.get("group_id") or "main",
+                    source=row.get("source") or "text",
+                    source_description=row.get("source_description")
+                    or f"flush_graphiti_pending {today()}",
+                )
+                ok_rows.append(
+                    {
+                        **row,
+                        "status": "flushed",
+                        "flushed_at": now_iso(),
+                        "flush_url": args.url,
+                    }
+                )
+                report["flushed"].append(name)
+            except Exception as exc:
+                failed_rows.append(
+                    {
+                        **row,
+                        "status": "pending",
+                        "last_error": str(exc),
+                        "last_attempt": now_iso(),
+                    }
+                )
+                report["failed"].append({"name": name, "error": str(exc)[:200]})
+
+        append_archive(ok_rows)
+        todo_names = {(row.get("name") or "") for row in todo}
+        unprocessed = [
+            row
+            for row in dedupe_latest(rows)
+            if (row.get("name") or "") not in todo_names
+        ]
+        rewrite_pending(failed_rows + unprocessed)
+
+    atomic_write_json(DIAG / f"flush_graphiti_pending_{today()}.json", report)
+    print(json.dumps(report, indent=2))
+    return 1 if report["failed"] else 0
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Flush pending Graphiti episodes via MCP HTTP")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--url", default=DEFAULT_URL, help="Graphiti MCP streamable HTTP URL")
-    ap.add_argument("--limit", type=int, default=20, help="max episodes per run")
-    args = ap.parse_args()
-
-    rows = load_pending()
-    todo = dedupe_latest(rows)[: args.limit]
-    report = {
-        "ts": now_iso(),
-        "url": args.url,
-        "queued": len(rows),
-        "to_flush": len(todo),
-        "flushed": [],
-        "failed": [],
-        "skipped": 0,
-    }
-
-    if not todo:
-        print(json.dumps({**report, "message": "queue empty"}, indent=2))
-        return 0
-
-    if args.dry_run:
-        report["dry_run_names"] = [r.get("name") for r in todo]
-        print(json.dumps(report, indent=2))
-        return 0
-
-    try:
-        client = GraphitiMCPHttp(url=args.url)
-        client.connect()
-    except Exception as e:
-        report["error"] = f"connect_failed: {e}"
-        print(json.dumps(report, indent=2))
-        # leave queue intact
-        return 2
-
-    ok_rows: list[dict] = []
-    fail_rows: list[dict] = []
-
-    for r in todo:
-        name = r.get("name") or "unnamed"
-        try:
-            client.add_memory(
-                name=name,
-                episode_body=r.get("episode_body") or "",
-                group_id=r.get("group_id") or "main",
-                source=r.get("source") or "text",
-                source_description=r.get("source_description")
-                or f"flush_graphiti_pending {today()}",
-            )
-            flushed = {
-                **r,
-                "status": "flushed",
-                "flushed_at": now_iso(),
-                "flush_url": args.url,
-            }
-            ok_rows.append(flushed)
-            report["flushed"].append(name)
-        except Exception as e:
-            failed = {**r, "status": "pending", "last_error": str(e), "last_attempt": now_iso()}
-            fail_rows.append(failed)
-            report["failed"].append({"name": name, "error": str(e)[:200]})
-
-    append_archive(ok_rows)
-    # Keep unprocessed pending when --limit truncates the queue (do not drop them).
-    todo_names = {(r.get("name") or "") for r in todo}
-    unprocessed = [
-        r
-        for r in dedupe_latest(rows)
-        if (r.get("name") or "") not in todo_names
-    ]
-    rewrite_pending(fail_rows + unprocessed)
-
-    DIAG.mkdir(parents=True, exist_ok=True)
-    (DIAG / f"flush_graphiti_pending_{today()}.json").write_text(
-        json.dumps(report, indent=2)
-    )
-    print(json.dumps(report, indent=2))
-    # 0 if all ok, 1 if partial, 2 if connect fail (handled above)
-    if report["failed"] and not report["flushed"]:
-        return 1
-    if report["failed"]:
-        return 1
-    return 0
+    parser = argparse.ArgumentParser(description="Flush pending Graphiti episodes via MCP HTTP")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--url", default=DEFAULT_URL, help="Graphiti MCP streamable HTTP URL")
+    parser.add_argument("--limit", type=int, default=20, help="max episodes per run")
+    return flush_pending(parser.parse_args())
 
 
 if __name__ == "__main__":

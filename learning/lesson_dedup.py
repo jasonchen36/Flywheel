@@ -39,13 +39,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import shutil
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import load_jsonl_objects, rewrite_jsonl
 
 MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
 DIAGNOSTICS = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
@@ -102,24 +102,11 @@ def jaccard(a: set[str], b: set[str]) -> float:
 
 
 def load_review_queue() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    out = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(REVIEW_FILE).records
 
 
 def write_review_queue(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(REVIEW_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def find_merge_candidates(lessons: list[dict], threshold: float) -> list[dict]:

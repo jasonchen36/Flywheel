@@ -40,6 +40,7 @@ import argparse
 import json
 from datetime import datetime, timedelta, timezone
 from harness_paths import HARNESS_HOME
+from state_io import load_jsonl_objects, rewrite_jsonl
 
 ENFORCE_LOG   = HARNESS_HOME / "MEMORY/LEARNING/enforcement_log.jsonl"
 CONFIG_JSON   = HARNESS_HOME / "MEMORY/STATE/enforcement_config.json"
@@ -79,24 +80,11 @@ def load_enforcement_log() -> list[dict]:
 
 
 def load_review_queue() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    records = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
+    return load_jsonl_objects(REVIEW_FILE).records
 
 
 def write_review_queue(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(REVIEW_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def main() -> int:

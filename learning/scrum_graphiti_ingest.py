@@ -20,6 +20,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import LEARNING, SCRUM_DIR, STATE
+from state_io import append_jsonl_unlocked, atomic_write_json, exclusive_locks
 
 REC = SCRUM_DIR
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
@@ -119,12 +120,19 @@ def main() -> int:
         return 0
 
     if queued:
-        STATE.mkdir(parents=True, exist_ok=True)
-        with PENDING.open("a") as f:
+        committed_names: list[str] = []
+        with exclusive_locks((PENDING, LEDGER)):
+            current = load_ledger()
+            current_ingested = current.setdefault("ingested", {})
             for key, name, row in queued:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-                ingested[key] = {"name": name, "ts": now_iso()}
-        LEDGER.write_text(json.dumps(ledger, indent=2))
+                if key in current_ingested:
+                    continue
+                append_jsonl_unlocked(PENDING, row)
+                current_ingested[key] = {"name": name, "ts": now_iso()}
+                committed_names.append(name)
+            atomic_write_json(LEDGER, current)
+        report["candidates_queued"] = len(committed_names)
+        report["names"] = committed_names
     print(json.dumps(report, indent=2))
 
     if args.flush and queued:
