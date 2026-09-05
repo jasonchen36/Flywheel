@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import load_jsonl_objects, rewrite_jsonl
+from review_store import enqueue_pending, load_reviews
 
 MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
 DIAGNOSTICS = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
@@ -102,11 +102,7 @@ def jaccard(a: set[str], b: set[str]) -> float:
 
 
 def load_review_queue() -> list[dict]:
-    return load_jsonl_objects(REVIEW_FILE).records
-
-
-def write_review_queue(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def find_merge_candidates(lessons: list[dict], threshold: float) -> list[dict]:
@@ -178,12 +174,12 @@ def main() -> int:
                        if "survivor=" in r.get("note", "") else None)
                       for r in review_records
                       if r.get("status") == "pending" and r.get("source") == "lesson_dedup"}
-    queued = []
+    pending_rows: list[dict] = []
     for c in candidates:
         key = f"{c['survivor']}<-{c['loser']}"
         if key in already_queued:
             continue
-        review_records.append({
+        pending_rows.append({
             "pattern": key, "detected_at": today, "delta": None,
             "after_n": c["survivor_n"] + c["loser_n"],
             "obj_verdict": "n/a", "judge_verdict": "n/a", "status": "pending",
@@ -192,10 +188,9 @@ def main() -> int:
                     f"name_overlap={c['name_overlap']}. Approve to delete lesson_autogen_{c['loser']}.md "
                     f"(backed up first) and fold its evidence into lesson_autogen_{c['survivor']}.md.",
         })
-        queued.append(key)
-
+    added = enqueue_pending(REVIEW_FILE, pending_rows)
+    queued = [record["pattern"] for record in added]
     if queued:
-        write_review_queue(review_records)
         print(f"[lesson_dedup] Queued {len(queued)} merge candidate(s): {queued}")
     else:
         print("[lesson_dedup] All candidates already queued.")

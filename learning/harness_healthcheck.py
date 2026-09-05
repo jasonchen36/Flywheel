@@ -26,7 +26,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from harness_config import load_enforcement_config
 from harness_paths import HARNESS_HOME, LEARNING, LESSONS_DIR, STATE, SIGNALS
+from state_io import load_jsonl_objects
 from state_io import try_read_json_object as load_json_object
 
 MEM = LESSONS_DIR
@@ -219,17 +221,70 @@ def main() -> int:
         report["errors"].append("graph_preflight.md missing")
         report["ok"] = False
 
+    # Review queue state machine
+    review_result = load_jsonl_objects(SIGNALS / "pending_human_review.jsonl")
+    review_statuses = Counter(str(record.get("status") or "missing")
+                              for record in review_result.records)
+    known_review_statuses = {
+        "pending", "processing", "action_failed", "approved", "rejected", "auto-escalated"
+    }
+    unknown_review_statuses = sorted(set(review_statuses) - known_review_statuses)
+    failed_review_patterns = [
+        str(record.get("pattern") or "?")
+        for record in review_result.records
+        if record.get("status") == "action_failed"
+    ]
+    processing_review_patterns = [
+        str(record.get("pattern") or "?")
+        for record in review_result.records
+        if record.get("status") == "processing"
+    ]
+    report["checks"]["review_queue"] = {
+        "counts": dict(sorted(review_statuses.items())),
+        "invalid_lines": list(review_result.invalid_lines),
+        "failed_patterns": failed_review_patterns,
+        "processing_patterns": processing_review_patterns,
+        "unknown_statuses": unknown_review_statuses,
+    }
+    if review_result.invalid_lines:
+        report["errors"].append(
+            f"review queue has malformed JSON object rows: {list(review_result.invalid_lines)}"
+        )
+        report["ok"] = False
+    if unknown_review_statuses:
+        report["errors"].append(
+            f"review queue has unknown statuses: {unknown_review_statuses}"
+        )
+        report["ok"] = False
+    if failed_review_patterns:
+        report["warnings"].append(
+            f"review actions failed and require --retry-failed: {failed_review_patterns}"
+        )
+    if processing_review_patterns:
+        report["warnings"].append(
+            f"review actions are still processing: {processing_review_patterns}"
+        )
+
     # Enforcement config
-    enc = state_object("enforcement_config.json")
-    ov = enc.get("overrides") or {}
+    enforcement_result = load_enforcement_config(STATE / "enforcement_config.json")
+    enc = enforcement_result.config
+    ov = enc.overrides
     report["checks"]["enforcement"] = {
-        "enabled": enc.get("enabled", True),
+        "valid": enforcement_result.ok,
+        "errors": list(enforcement_result.errors),
+        "enabled": enc.enabled,
         "graphiti_bypassed": ov.get("graphiti_bypassed"),
         "unverified_completion": ov.get("unverified_completion"),
         "unverified_claims": ov.get("unverified_claims"),
         "claim_evidence": ov.get("claim_evidence"),
         "silent_completion": ov.get("silent_completion"),
     }
+    if not enforcement_result.ok:
+        report["errors"].extend(
+            f"invalid enforcement_config.json: {error}"
+            for error in enforcement_result.errors
+        )
+        report["ok"] = False
     if ov.get("graphiti_bypassed") != "block":
         report["warnings"].append("graphiti_bypassed is not block")
     if ov.get("unverified_completion") != "block":
@@ -345,6 +400,7 @@ def main() -> int:
         print(f"Signal freshness: {report['checks']['signal_freshness']}")
         print(f"Graph: {report['checks']['graph']}")
         print(f"Enforcement: {report['checks']['enforcement']}")
+        print(f"Review queue: {report['checks']['review_queue']}")
         print(f"skill_autofix: {report['checks']['skill_autofix']}")
         print(f"Gates: {report['checks']['gates']}")
         print(f"Files missing: {missing or 'none'}")

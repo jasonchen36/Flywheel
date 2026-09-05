@@ -46,7 +46,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import rewrite_jsonl
+from review_store import enqueue_pending, load_reviews
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -89,21 +89,7 @@ def write_ledger(records: list[dict]) -> None:
 
 
 def load_review_queue() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    out = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
-
-
-def write_review_queue(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def suggest_keywords(label: str, summaries: list[str], top_n: int = 6) -> list[str]:
@@ -199,14 +185,14 @@ def main() -> int:
     review_records = load_review_queue()
     already_queued = {r["pattern"] for r in review_records
                        if r.get("status") == "pending" and r.get("source") == "pattern_promotion"}
-    queued = []
+    pending_rows: list[dict] = []
     for label, recs in candidates.items():
         if label in already_queued:
             continue
         kws = suggest_keywords(label, [r["sentiment_summary"] for r in recs])
         avg = sum(r["rating"] for r in recs if r.get("rating")) / max(
             1, sum(1 for r in recs if r.get("rating")))
-        review_records.append({
+        pending_rows.append({
             "pattern": label, "detected_at": today, "delta": None,
             "after_n": len(recs), "obj_verdict": "n/a", "judge_verdict": "n/a",
             "status": "pending", "reviewed_at": None, "reviewer": None,
@@ -216,10 +202,9 @@ def main() -> int:
                     f"Suggested keywords for PATTERN_KEYWORDS: {kws}. "
                     f"Approve to append to self_improve.py's taxonomy.",
         })
-        queued.append(label)
-
+    added = enqueue_pending(REVIEW_FILE, pending_rows)
+    queued = [record["pattern"] for record in added]
     if queued:
-        write_review_queue(review_records)
         print(f"[pattern_promotion] Queued {len(queued)} new pattern(s) for review: {queued}")
     return 0
 

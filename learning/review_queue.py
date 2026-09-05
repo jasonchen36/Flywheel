@@ -28,13 +28,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from harness_config import EnforcementConfig, load_enforcement_config, save_enforcement_config
 from harness_paths import HARNESS_HOME
+from review_store import (
+    ClaimResult,
+    claim_review,
+    finalize_claim,
+    load_reviews,
+    reject_review,
+    review_source,
+)
 from state_io import (
     append_jsonl_unlocked,
-    atomic_write_json,
     exclusive_lock,
-    load_jsonl_objects,
-    rewrite_jsonl,
 )
 
 REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
@@ -47,11 +53,7 @@ AUDIT_MAX_LINES    = 5000   # rotate audit log when it exceeds this line count
 # ── I/O helpers ──────────────────────────────────────────────────────────────
 
 def load_records() -> list[dict[str, Any]]:
-    return load_jsonl_objects(REVIEW_FILE).records
-
-
-def write_records(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def load_scores() -> dict:
@@ -87,7 +89,7 @@ def _days_old(detected: str, today: str) -> int:
     try:
         return (datetime.strptime(today, "%Y-%m-%d") -
                 datetime.strptime(detected, "%Y-%m-%d")).days
-    except ValueError:
+    except (TypeError, ValueError):
         return 0
 
 
@@ -97,12 +99,15 @@ def cmd_list(records: list[dict], today: str) -> int:
     pending = [r for r in records if r.get("status") == "pending"]
     expiring = [r for r in pending if _days_old(r.get("detected_at", ""), today) > REVIEW_EXPIRE_DAYS]
     active = [r for r in pending if r not in expiring]
+    processing = [r for r in records if r.get("status") == "processing"]
+    failed = [r for r in records if r.get("status") == "action_failed"]
     approved_ct = sum(1 for r in records if r.get("status") == "approved")
     rejected_ct = sum(1 for r in records if r.get("status") == "rejected")
     auto_ct = sum(1 for r in records if r.get("status") == "auto-escalated")
 
     print(f"Review queue — {today}")
     print(f"  pending: {len(active)} | auto-expiring: {len(expiring)} | "
+          f"processing: {len(processing)} | failed: {len(failed)} | "
           f"approved: {approved_ct} | rejected: {rejected_ct} | auto-escalated: {auto_ct}")
 
     scores = load_scores()
@@ -132,7 +137,23 @@ def cmd_list(records: list[dict], today: str) -> int:
             print(f"  [{rec['pattern']}] detected {rec.get('detected_at')} "
                   f"({_days_old(rec.get('detected_at', ''), today)}d ago)")
 
-    if not active and not expiring:
+    if processing:
+        print("\nApproval actions still processing:\n")
+        for rec in processing:
+            print(f"  [{rec.get('pattern', '?')}] source={review_source(rec)} "
+                  f"started={rec.get('action_started_at', '?')}")
+
+    if failed:
+        print("\nApproval actions requiring operator resolution:\n")
+        for rec in failed:
+            pattern = rec.get("pattern", "?")
+            source = review_source(rec)
+            print(f"  [{pattern}] source={source} attempts={rec.get('action_attempts', 0)}")
+            print(f"    error: {rec.get('action_error', 'unknown failure')}")
+            print(f"    → retry:  python review_queue.py --approve {pattern} --source {source} --retry-failed")
+            print(f"    → reject: python review_queue.py --reject {pattern} --source {source} --retry-failed --reason '...'")
+
+    if not active and not expiring and not processing and not failed:
         print("\nQueue empty — no patterns awaiting review.")
 
     return 0
@@ -238,81 +259,127 @@ def cmd_history(pattern: str, records: list[dict], today: str) -> int:
     return 0
 
 
+def _print_lookup_failure(result: ClaimResult, target: str, source: str | None) -> int:
+    if result.status == "ambiguous":
+        print(f"AMBIGUOUS: {len(result.matches)} active records match pattern '{target}'. "
+              "Re-run with --source to disambiguate:")
+        for record in result.matches:
+            print(f"  --source {review_source(record)!r}  "
+                  f"(detected {record.get('detected_at')}, "
+                  f"note: {(record.get('note') or '')[:80]})")
+    elif source is not None:
+        print(f"No eligible record found for pattern '{target}' with source '{source}'.")
+    else:
+        print(f"No eligible record found for pattern: {target}")
+    return 1
+
+
+def _audit_values(record: dict) -> tuple[float, int]:
+    try:
+        delta = float(record.get("delta") or 0.0)
+    except (TypeError, ValueError):
+        delta = 0.0
+    try:
+        after_n = int(record.get("after_n") or 0)
+    except (TypeError, ValueError):
+        after_n = 0
+    return delta, after_n
+
+
+def _run_approval_side_effect(record: dict, variant: int, today: str) -> bool:
+    target = str(record.get("pattern") or "")
+    source = review_source(record)
+    note = str(record.get("note") or "")
+    if source == "enforcement_promotion":
+        return _promote_config_only_pattern(target, today)
+    if source == "lesson_evolve":
+        return _apply_lesson_variant(target, variant, today)
+    if source == "pattern_promotion":
+        return _promote_pattern_to_taxonomy(target, note, today)
+    if source == "lesson_dedup":
+        return _merge_dedup_pattern(target, note, today)
+    return True
+
+
 def cmd_approve_reject(records: list[dict], target: str, action: str,
                        reason: str, today: str, variant: int = 0,
-                       source: str | None = None) -> int:
-    # A pattern name is NOT a unique key across sources — e.g. base escalation records
-    # (source unset) and lesson_evolve/held_out_regression/lesson_dedup/pattern_promotion
-    # records can share the same pattern string. Matching by name alone would silently
-    # approve/reject the WRONG record. Require --source to disambiguate whenever more
-    # than one pending record shares this pattern.
-    pending_matches = [r for r in records if r.get("pattern") == target and r.get("status") == "pending"]
-    if len(pending_matches) > 1 and source is None:
-        print(f"AMBIGUOUS: {len(pending_matches)} pending records match pattern '{target}'. "
-              f"Re-run with --source to disambiguate:")
-        for r in pending_matches:
-            print(f"  --source {r.get('source', 'base')!r}  (detected {r.get('detected_at')}, "
-                  f"note: {(r.get('note') or '')[:80]})")
-        return 1
-    if source is not None:
-        pending_matches = [r for r in pending_matches if (r.get("source") or "base") == source]
-        if not pending_matches:
-            print(f"No pending record found for pattern '{target}' with source '{source}'.")
-            return 1
-
-    if not pending_matches:
-        print(f"No pending record found for pattern: {target}")
-        return 1
-
-    rec = pending_matches[0]
-    rec["status"] = action
-    rec["reviewed_at"] = today
-    rec["reviewer"] = "USER"
-    if reason:
-        rec["reason"] = reason
-    delta = rec.get("delta", 0.0) or 0.0
-    after_n = rec.get("after_n", 0)
-    is_config_only = rec.get("source") == "enforcement_promotion"
-    is_pattern_promo = rec.get("source") == "pattern_promotion"
-    is_held_out = rec.get("source") == "held_out_regression"
-    is_lesson_dedup = rec.get("source") == "lesson_dedup"
-    is_lesson_evolve = rec.get("source") == "lesson_evolve"
-    note = rec.get("note", "")
-    write_records(records)
-    log_audit(action, target, "USER", today, reason=reason, delta=delta, after_n=after_n)
-    print(f"{action.capitalize()}: {target} (reviewed_at: {today})")
+                       source: str | None = None, *, retry_failed: bool = False,
+                       reviewer: str = "USER") -> int:
+    # Keep the records argument for API compatibility; the transactional store always
+    # re-reads under its own lock before mutating the queue.
+    del records
     if action == "rejected":
-        if is_config_only:
+        result = reject_review(
+            REVIEW_FILE, target, source=source, reviewer=reviewer, reason=reason,
+            retry_failed=retry_failed,
+        )
+        if result.status != "claimed" or result.record is None:
+            return _print_lookup_failure(result, target, source)
+        record = result.record
+        delta, after_n = _audit_values(record)
+        log_audit("rejected", target, reviewer, today, reason=reason,
+                  delta=delta, after_n=after_n)
+        print(f"Rejected: {target} (reviewed_at: {today})")
+        record_source = review_source(record)
+        if record_source == "enforcement_promotion":
             print("Left at 'warn' in enforcement_config.json — no lesson to revise for config-only patterns.")
-        elif is_pattern_promo:
-            print(f"Pattern '{target}' NOT promoted to PATTERN_KEYWORDS. Ledger entries stay pending "
-                  f"(will re-queue on next pattern_promotion.py run unless you edit "
-                  f"SIGNALS/pattern_candidates.jsonl status to 'rejected' for this label).")
-        elif is_held_out:
+        elif record_source == "pattern_promotion":
+            print(f"Pattern '{target}' NOT promoted to PATTERN_KEYWORDS. Ledger entries stay pending.")
+        elif record_source == "held_out_regression":
             print(f"No action taken on lesson_autogen_{target}.md — flagged side-effect dismissed as noise.")
-        elif is_lesson_dedup:
+        elif record_source == "lesson_dedup":
             print(f"No merge performed for '{target}'. Both lesson files kept as-is.")
-        elif is_lesson_evolve:
+        elif record_source == "lesson_evolve":
             print(f"No variant applied to lesson_autogen_{target}.md. Lesson text unchanged.")
         else:
             print(f"NOTE: revise lesson_autogen_{target}.md, then re-run self_improve.py --regen {target}")
-    elif is_config_only:
-        _promote_config_only_pattern(target, today)
-    elif is_lesson_evolve:
-        _apply_lesson_variant(target, variant, today)
-    elif is_pattern_promo:
-        _promote_pattern_to_taxonomy(target, note, today)
-    elif is_lesson_dedup:
-        _merge_dedup_pattern(target, note, today)
-    elif is_held_out:
+        return 0
+
+    claim = claim_review(
+        REVIEW_FILE,
+        target,
+        source=source,
+        reviewer=reviewer,
+        retry_failed=retry_failed,
+    )
+    if claim.status != "claimed" or claim.record is None:
+        return _print_lookup_failure(claim, target, source)
+    record = claim.record
+    claim_id = str(record["claim_id"])
+    error = ""
+    try:
+        success = _run_approval_side_effect(record, variant, today)
+        if not success:
+            error = f"{review_source(record)} approval side effect returned failure"
+    except Exception as exc:
+        success = False
+        error = f"{type(exc).__name__}: {exc}"
+    finalized = finalize_claim(
+        REVIEW_FILE, claim_id, success=success, error=error
+    )
+    if finalized is None:
+        print(f"ERROR: review claim {claim_id} disappeared before finalization.")
+        return 2
+    delta, after_n = _audit_values(finalized)
+    if not success:
+        log_audit("action-failed", target, reviewer, today, reason=error,
+                  delta=delta, after_n=after_n)
+        print(f"ACTION FAILED: {target}: {error}. Re-run with --retry-failed after fixing the cause.")
+        return 2
+
+    log_audit("approved", target, reviewer, today, reason=reason,
+              delta=delta, after_n=after_n)
+    print(f"Approved: {target} (reviewed_at: {today})")
+    record_source = review_source(finalized)
+    if record_source == "held_out_regression":
         print(f"NOTE: review lesson_autogen_{target}.md for the side-effect described above — "
-              f"revise or revert manually, this queue only flags, it never auto-edits the lesson.")
-    else:
+              "revise or revert manually, this queue only flags.")
+    elif record_source == "base":
         print("Pattern enters escalation on next measurement run (session end).")
     return 0
 
 
-def _promote_config_only_pattern(pattern: str, today: str) -> None:
+def _promote_config_only_pattern(pattern: str, today: str) -> bool:
     """Approving a CONFIG_ONLY_PATTERNS record (see enforcement_promotion.py) has no
     escalate[] consumer to act on — the mode lives only in enforcement_config.json
     overrides, so approval must edit that file directly to take effect."""
@@ -320,19 +387,24 @@ def _promote_config_only_pattern(pattern: str, today: str) -> None:
     if pattern not in CONFIG_ONLY_PATTERNS:
         print(f"WARNING: {pattern} marked source=enforcement_promotion but not in "
               f"CONFIG_ONLY_PATTERNS — not editing enforcement_config.json. Check for drift.")
-        return
-    try:
-        cfg: dict[str, Any] = json.loads(CONFIG_JSON.read_text()) if CONFIG_JSON.exists() else {"enabled": True, "overrides": {}}
-    except (json.JSONDecodeError, OSError):
-        cfg = {"enabled": True, "overrides": {}}
-    cfg.setdefault("overrides", {})[pattern] = "block"
-    atomic_write_json(CONFIG_JSON, cfg)
+        return False
+    config_result = load_enforcement_config(CONFIG_JSON)
+    if not config_result.ok:
+        print("WARNING: invalid enforcement_config.json; refusing promotion: "
+              + "; ".join(config_result.errors))
+        return False
+    overrides = dict(config_result.config.overrides)
+    overrides[pattern] = "block"
+    save_enforcement_config(
+        CONFIG_JSON, EnforcementConfig(config_result.config.enabled, overrides)
+    )
     log_audit("config-promoted", pattern, "USER", today,
               reason="overrides[pattern] warn -> block via review approval")
     print(f"enforcement_config.json: overrides['{pattern}'] = 'block' (was 'warn'). Effective immediately — no restart needed, EnforcementGate reads this file fresh every Stop hook invocation.")
+    return True
 
 
-def _promote_pattern_to_taxonomy(pattern: str, note: str, today: str) -> None:
+def _promote_pattern_to_taxonomy(pattern: str, note: str, today: str) -> bool:
     """Approving a pattern_promotion.py record: mechanically append the new pattern to
     PATTERN_KEYWORDS in self_improve.py. Keywords are parsed back out of the review note
     (the same list the human just reviewed) so approval doesn't silently re-derive a
@@ -355,7 +427,7 @@ def _promote_pattern_to_taxonomy(pattern: str, note: str, today: str) -> None:
     if not ok:
         print(f"WARNING: could not locate PATTERN_KEYWORDS marker in self_improve.py — "
               f"pattern '{pattern}' NOT appended. Add it manually.")
-        return
+        return False
 
     # Mark this label's ledger entries as promoted so pattern_promotion.py stops
     # re-queuing it and self_improve.py's classifier picks it up on next run.
@@ -368,9 +440,10 @@ def _promote_pattern_to_taxonomy(pattern: str, note: str, today: str) -> None:
     log_audit("taxonomy-promoted", pattern, "USER", today,
               reason=f"appended to PATTERN_KEYWORDS with keywords={keywords}")
     print(f"self_improve.py: PATTERN_KEYWORDS['{pattern}'] = {keywords} (appended, effective next run).")
+    return True
 
 
-def _apply_lesson_variant(target: str, variant: int, today: str) -> None:
+def _apply_lesson_variant(target: str, variant: int, today: str) -> bool:
     """Approving a lesson_evolve.py record: apply the chosen candidate variant
     (default 0) to the lesson file. See lesson_evolve.apply_variant for the mechanics."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -379,9 +452,10 @@ def _apply_lesson_variant(target: str, variant: int, today: str) -> None:
     if ok:
         log_audit("lesson-evolved", target, "USER", today,
                   reason=f"applied variant {variant}")
+    return ok
 
 
-def _merge_dedup_pattern(target: str, note: str, today: str) -> None:
+def _merge_dedup_pattern(target: str, note: str, today: str) -> bool:
     """Approving a lesson_dedup.py record: parse survivor/loser out of the review note
     (target is 'survivor<-loser') and perform the file merge via lesson_dedup.merge_lessons."""
     import re as _re
@@ -391,12 +465,13 @@ def _merge_dedup_pattern(target: str, note: str, today: str) -> None:
     m = _re.match(r"^(.+)<-(.+)$", target)
     if not m:
         print(f"WARNING: could not parse survivor/loser from target '{target}'. No merge performed.")
-        return
+        return False
     survivor, loser = m.group(1), m.group(2)
     ok = merge_lessons(survivor, loser, today)
     if ok:
         log_audit("lesson-merged", target, "USER", today,
                   reason=f"merged lesson_autogen_{loser}.md into lesson_autogen_{survivor}.md")
+    return ok
 
 
 # Sources safe for unattended approval (mutations are local harness files only —
@@ -445,30 +520,14 @@ def cmd_auto_drain(records: list[dict], min_age: int, sources_csv: str, today: s
           f"(min_age={min_age}d, sources={sorted(allowed)})")
     ok = 0
     fail = 0
-    # Re-load after each approval so status mutations don't collide across
-    # multiple pending rows that share a pattern name.
     for rec in eligible:
         pattern = rec.get("pattern", "")
-        source = rec.get("source") or "base"
-        # cmd_approve_reject rewrites the file; refresh each iteration
-        fresh = load_records()
-        # Tag reviewer as auto-drain by patching after approve if needed
-        rc = cmd_approve_reject(fresh, pattern, "approved", "auto-drain", today,
-                                variant=0, source=source)
+        source = review_source(rec)
+        rc = cmd_approve_reject(
+            [], pattern, "approved", "auto-drain", today,
+            variant=0, source=source, reviewer="auto-drain",
+        )
         if rc == 0:
-            # rewrite reviewer field to auto-drain for audit clarity
-            updated = load_records()
-            for r in updated:
-                if (r.get("pattern") == pattern
-                        and (r.get("source") or "base") == source
-                        and r.get("status") == "approved"
-                        and r.get("reviewed_at") == today
-                        and r.get("reviewer") == "USER"):
-                    r["reviewer"] = "auto-drain"
-                    r["reason"] = r.get("reason") or "auto-drain"
-            write_records(updated)
-            log_audit("auto-drain-approved", pattern, "auto-drain", today,
-                      reason=f"source={source}")
             ok += 1
         else:
             fail += 1
@@ -502,20 +561,23 @@ def cmd_bulk_approve(records: list[dict], min_age: int, yes: bool, today: str) -
             print("Aborted.")
             return 1
 
-    approved_pats = []
-    for rec in records:
-        if rec.get("status") == "pending" and rec in eligible:
-            rec["status"] = "approved"
-            rec["reviewed_at"] = today
-            rec["reviewer"] = "USER"
-            log_audit("bulk-approved", rec["pattern"], "USER", today,
-                      delta=rec.get("delta", 0.0), after_n=rec.get("after_n", 0))
-            approved_pats.append(rec["pattern"])
+    approved_pats: list[str] = []
+    failed_pats: list[str] = []
+    for rec in eligible:
+        pattern = str(rec.get("pattern") or "")
+        rc = cmd_approve_reject(
+            [], pattern, "approved", "bulk-approve", today,
+            source=review_source(rec), reviewer="USER",
+        )
+        if rc == 0:
+            approved_pats.append(pattern)
+        else:
+            failed_pats.append(pattern)
 
-    write_records(records)
     print(f"Approved {len(approved_pats)}: {approved_pats}")
-    print("Patterns enter escalation on next measurement run (session end).")
-    return 0
+    if failed_pats:
+        print(f"Failed {len(failed_pats)}: {failed_pats}")
+    return 0 if not failed_pats else 1
 
 
 def cmd_summary(records: list[dict], today: str) -> int:
@@ -534,6 +596,8 @@ def cmd_summary(records: list[dict], today: str) -> int:
 
     approved_ct = sum(1 for r in records if r.get("status") == "approved")
     rejected_ct = sum(1 for r in records if r.get("status") == "rejected")
+    processing_ct = sum(1 for r in records if r.get("status") == "processing")
+    failed_ct = sum(1 for r in records if r.get("status") == "action_failed")
     auto_ct = sum(1 for r in records if r.get("status") == "auto-escalated")
 
     audit_ct = 0
@@ -544,8 +608,8 @@ def cmd_summary(records: list[dict], today: str) -> int:
     print("=" * w)
     print(f"  Self-Improvement Review Queue  —  {today}")
     print("=" * w)
-    print(f"  pending={len(active)}  expiring={len(expiring)}  approved={approved_ct}"
-          f"  rejected={rejected_ct}  auto={auto_ct}")
+    print(f"  pending={len(active)}  expiring={len(expiring)}  processing={processing_ct}"
+          f"  failed={failed_ct}  approved={approved_ct}  rejected={rejected_ct}  auto={auto_ct}")
     print(f"  recidivists={recidivists}  audit_entries={audit_ct}")
     print("-" * w)
 
@@ -586,6 +650,8 @@ def main() -> int:
     ap.add_argument("--approve", metavar="PATTERN", help="approve pattern for escalation")
     ap.add_argument("--reject", metavar="PATTERN", help="reject pattern (flag lesson for revision)")
     ap.add_argument("--reason", default="", help="reason for rejection (used with --reject)")
+    ap.add_argument("--retry-failed", action="store_true",
+                    help="retry an action_failed approval after fixing its cause")
     ap.add_argument("--variant", type=int, default=0,
                     help="for lesson_evolve approvals: which candidate variant to apply (default 0)")
     ap.add_argument("--source", default=None,
@@ -620,7 +686,10 @@ def main() -> int:
     if args.approve or args.reject:
         target = args.approve or args.reject
         action = "approved" if args.approve else "rejected"
-        return cmd_approve_reject(records, target, action, args.reason, today, args.variant, args.source)
+        return cmd_approve_reject(
+            records, target, action, args.reason, today, args.variant, args.source,
+            retry_failed=args.retry_failed,
+        )
 
     if args.auto_drain:
         return cmd_auto_drain(records, args.min_age, args.auto_sources, today)

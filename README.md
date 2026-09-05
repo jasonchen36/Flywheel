@@ -127,16 +127,31 @@ Tag ratings with `agent: claude|grok|pi` (hooks set this when possible).
 
 ---
 
+## Runtime Diagnostics and Review Recovery
+
+SessionEnd writes stage logs plus `latest.tsv` and an atomic `latest.json` under `MEMORY/LEARNING/DIAGNOSTICS/session-end/`. The JSON summary includes total duration, stage counts, failed stage names, and whether the run completed cleanly or with failures. Overlapping runs are recorded separately in `skipped.tsv` and `skipped.json`.
+
+Review approvals use `pending → processing → approved|action_failed`. If a source-specific side effect fails, inspect the stored `action_error`, correct the cause, and retry explicitly:
+
+```bash
+python3 "$HARNESS_HOME/MEMORY/LEARNING/review_queue.py" \
+  --approve PATTERN --source SOURCE --retry-failed
+```
+
+`harness_healthcheck.py --json` reports malformed review rows, unknown statuses, processing claims, failed actions, and invalid enforcement configuration.
+
+---
+
 ## Development and Validation
 
-Install the development tools and run the same quality gate used by CI:
+Install the development tools and run the complete repository quality gate:
 
 ```bash
 make install-dev
 make check
 ```
 
-The gate runs Ruff, mypy with Python 3.11 compatibility, Python compilation, the complete pytest suite, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, ShellCheck, and 100% branch coverage for the shared state-I/O foundation. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.11 compatibility, Python compilation, the complete branch-aware pytest suite with an 18% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, and validated configuration each require 100% statement and branch coverage. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 
