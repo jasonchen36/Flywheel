@@ -16,6 +16,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import atomic_write_json, atomic_write_text
 
 HOME = Path.home()
 ROOTS = [
@@ -113,19 +114,21 @@ def main() -> int:
         "note": "Do not auto-delete. Convert HOW recipes to intent/outcome or remove if SOTA already satisfies.",
         "ref": "https://danielmiessler.com/blog/intent-engineering",
     }
-    DIAG.mkdir(parents=True, exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out = DIAG / f"intent_how_audit_{day}.json"
-    out.write_text(json.dumps(report, indent=2))
+    atomic_write_json(out, report)
     md = DIAG / f"intent_how_audit_{day}.md"
     lines = [
         f"# Intent vs HOW audit — {day}\n",
         f"Flagged: {len(flagged)} / scanned files with HOW signals: {len(results)}\n\n",
         "Recommendation: rewrite as intent/outcome or delete if model defaults cover it. Keep safety constraints.\n\n",
     ]
-    for r in report["items"][:25]:
-        lines.append(f"- **{r['recommendation']}** `{r['path']}` (how={r['how_hits']} intent={r['intent_hits']} lines={r['lines']})\n")
-    md.write_text("".join(lines))
+    for result in sorted(flagged, key=lambda item: -item["how_hits"])[:25]:
+        lines.append(
+            f"- **{result['recommendation']}** `{result['path']}` "
+            f"(how={result['how_hits']} intent={result['intent_hits']} lines={result['lines']})\n"
+        )
+    atomic_write_text(md, "".join(lines))
     if args.json:
         print(json.dumps(report, indent=2))
     else:

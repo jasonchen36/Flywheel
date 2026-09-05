@@ -26,7 +26,16 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
 from harness_paths import HARNESS_HOME
+from state_io import (
+    append_jsonl_unlocked,
+    atomic_write_json,
+    exclusive_lock,
+    load_jsonl_objects,
+    rewrite_jsonl,
+)
 
 REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
 SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
@@ -37,23 +46,12 @@ AUDIT_MAX_LINES    = 5000   # rotate audit log when it exceeds this line count
 
 # ── I/O helpers ──────────────────────────────────────────────────────────────
 
-def load_records() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    records = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            pass
-    return records
+def load_records() -> list[dict[str, Any]]:
+    return load_jsonl_objects(REVIEW_FILE).records
 
 
 def write_records(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    REVIEW_FILE.write_text("".join(json.dumps(r) + "\n" for r in records))
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def load_scores() -> dict:
@@ -75,15 +73,14 @@ def _rotate_audit_if_needed() -> None:
 
 def log_audit(action: str, pattern: str, reviewer: str, today: str,
               reason: str = "", delta: float = 0.0, after_n: int = 0) -> None:
-    AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _rotate_audit_if_needed()
     entry = {
         "timestamp": today, "pattern": pattern, "action": action,
         "reviewer": reviewer, "reason": reason,
         "delta": delta, "after_n": after_n,
     }
-    with open(AUDIT_FILE, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    with exclusive_lock(AUDIT_FILE):
+        _rotate_audit_if_needed()
+        append_jsonl_unlocked(AUDIT_FILE, entry)
 
 
 def _days_old(detected: str, today: str) -> int:
@@ -325,11 +322,11 @@ def _promote_config_only_pattern(pattern: str, today: str) -> None:
               f"CONFIG_ONLY_PATTERNS — not editing enforcement_config.json. Check for drift.")
         return
     try:
-        cfg = json.loads(CONFIG_JSON.read_text()) if CONFIG_JSON.exists() else {"enabled": True, "overrides": {}}
+        cfg: dict[str, Any] = json.loads(CONFIG_JSON.read_text()) if CONFIG_JSON.exists() else {"enabled": True, "overrides": {}}
     except (json.JSONDecodeError, OSError):
         cfg = {"enabled": True, "overrides": {}}
     cfg.setdefault("overrides", {})[pattern] = "block"
-    CONFIG_JSON.write_text(json.dumps(cfg, indent=2))
+    atomic_write_json(CONFIG_JSON, cfg)
     log_audit("config-promoted", pattern, "USER", today,
               reason="overrides[pattern] warn -> block via review approval")
     print(f"enforcement_config.json: overrides['{pattern}'] = 'block' (was 'warn'). Effective immediately — no restart needed, EnforcementGate reads this file fresh every Stop hook invocation.")

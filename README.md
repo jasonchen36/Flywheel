@@ -136,7 +136,7 @@ make install-dev
 make check
 ```
 
-The gate runs Ruff correctness checks, Python compilation, the complete pytest suite, Bandit, dependency auditing, and ShellCheck. Individual targets are available as `make test`, `make lint`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.11 compatibility, Python compilation, the complete pytest suite, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, ShellCheck, and 100% branch coverage for the shared state-I/O foundation. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 

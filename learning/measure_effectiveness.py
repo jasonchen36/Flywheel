@@ -37,7 +37,10 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
 from harness_paths import BUNGRAPH_DB, HARNESS_HOME
+from state_io import append_jsonl, atomic_write_json, atomic_write_text, rewrite_jsonl
 
 # Reuse the EXACT classifier the generator uses — no attribution drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -218,7 +221,7 @@ def main() -> int:
         return 0
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    results = []
+    results: list[dict[str, Any]] = []
 
     for pattern, meta in sorted(lessons.items()):
         ldate = meta.get("baseline_date") or ""
@@ -333,7 +336,7 @@ def main() -> int:
     # Dual-signal (2026-07): if subjective is regressed/flat with enough post data BUT
     # objective looks fine, still escalate for ENFORCEABLE patterns. Real failure mode:
     # evals measured path-as-artifact while users still rated 3/10 for premature "done".
-    def escalation_verdict(r: dict) -> str:
+    def escalation_verdict(r: dict[str, Any]) -> str:
         if r["eval_covered"]:
             obj = r["obj_verdict"]
             subj = r["verdict"]
@@ -507,9 +510,7 @@ def main() -> int:
         return 0
 
     # ── write artifacts ─────────────────────────────────────────────────────────
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    (DIAGNOSTICS / f"effectiveness_{today}.md").write_text(report)
+    atomic_write_text(DIAGNOSTICS / f"effectiveness_{today}.md", report)
 
     scores = {r["pattern"]: {
         "verdict": r["verdict"], "delta": r["delta"],
@@ -523,14 +524,16 @@ def main() -> int:
         "days_open": r.get("days_open", 0),
         "injectable": bool(r.get("injectable")),
     } for r in results}
-    SCORES_JSON.write_text(json.dumps(
+    atomic_write_json(
+        SCORES_JSON,
         {"measured_at": today, "scores": scores,
          "escalate": [r["pattern"] for r in escalate],
          "stale_pending": [r["pattern"] for r in stale_pending],
          "injectable": [r["pattern"] for r in results if r.get("injectable")],
          "eval_coverage_gaps": gaps,
          "min_after": min_after,
-         "stale_pending_days": STALE_PENDING_DAYS}, indent=2))
+         "stale_pending_days": STALE_PENDING_DAYS},
+    )
 
     # Programmatically commit verdicts to bungraph.db (Point 1: Loopback)
     for r in results:
@@ -538,17 +541,18 @@ def main() -> int:
 
     # Human review queue — rewrite to persist auto-expires, append new first-time regressions.
     if _review_records or first_time_regressed:
-        REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(REVIEW_FILE, "w") as f:
-            for rec in _review_records:
-                f.write(json.dumps(rec) + "\n")
-            for r in first_time_regressed:
-                f.write(json.dumps({
-                    "pattern": r["pattern"], "detected_at": today,
-                    "delta": r["delta"], "after_n": r["after_n"],
-                    "obj_verdict": r["obj_verdict"], "judge_verdict": r["judge_verdict"],
-                    "status": "pending", "reviewed_at": None, "reviewer": None,
-                }) + "\n")
+        review_rows = list(_review_records)
+        review_rows.extend(
+            {
+                "pattern": result["pattern"], "detected_at": today,
+                "delta": result["delta"], "after_n": result["after_n"],
+                "obj_verdict": result["obj_verdict"],
+                "judge_verdict": result["judge_verdict"],
+                "status": "pending", "reviewed_at": None, "reviewer": None,
+            }
+            for result in first_time_regressed
+        )
+        rewrite_jsonl(REVIEW_FILE, review_rows)
         auto_expired_pats = [rec["pattern"] for rec in _review_records
                              if rec.get("reviewer") == "auto-expire"]
         if auto_expired_pats:
@@ -580,9 +584,8 @@ def main() -> int:
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
 
-    with open(EFFECT_LOG, "a") as f:
-        for r in results:
-            f.write(json.dumps({**r, "measured_at": today}) + "\n")
+    for result in results:
+        append_jsonl(EFFECT_LOG, {**result, "measured_at": today})
 
     print(f"Wrote: {DIAGNOSTICS / f'effectiveness_{today}.md'}")
     print(f"Wrote: {SCORES_JSON}")

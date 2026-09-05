@@ -32,7 +32,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from harness_paths import HARNESS_HOME, LESSONS_DIR
-from typing import Optional
+from typing import Any, Optional
+
+from state_io import load_jsonl_objects
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -521,7 +523,7 @@ def load_failures(
     domain: str = "all",   # "pr_review" | "dag" | "all"
 ) -> list[RatingEntry]:
     """Load from FAILURES dir — each entry has a rich CONTEXT.md with full analysis."""
-    entries = []
+    entries: list[RatingEntry] = []
     if not failures_dir.exists():
         return entries
 
@@ -574,33 +576,49 @@ def load_failures(
     return entries
 
 
+def _string_field(record: dict[str, Any], name: str) -> str:
+    value = record.get(name)
+    return value if isinstance(value, str) else ""
+
+
+def _string_list_field(record: dict[str, Any], name: str) -> list[str]:
+    value = record.get(name)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def load_all_ratings(path: Path) -> list[RatingEntry]:
-    entries = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            d = json.loads(line)
-            if d.get("rating") is None:
-                continue
-            entries.append(RatingEntry(
-                timestamp=d.get("timestamp", ""),
-                rating=int(d["rating"]),
-                session_id=d.get("session_id", ""),
-                source=d.get("source", ""),
-                sentiment_summary=d.get("sentiment_summary", ""),
-                confidence=float(d.get("confidence", 0.0)),
-                response_preview=d.get("response_preview", ""),
-                comment=d.get("comment", "") or "",
-                tools_used=d.get("tools_used", []) or [],
-                files_touched=d.get("files_touched", []) or [],
-                repo=d.get("repo", "") or "",
-                skill=d.get("skill", "") or "",
-                skill_candidates=list(d.get("skill_candidates") or []),
-                agent=d.get("agent", "") or "",
-                eval_results=d.get("eval_results", {}) or {},
-            ))
+    """Load valid rating rows while isolating malformed or incompatible records."""
+    entries: list[RatingEntry] = []
+    for record in load_jsonl_objects(path).records:
+        try:
+            rating = int(record["rating"])
+            confidence = float(record.get("confidence", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not 1 <= rating <= 10:
+            continue
+        eval_results = record.get("eval_results")
+        entries.append(
+            RatingEntry(
+                timestamp=_string_field(record, "timestamp"),
+                rating=rating,
+                session_id=_string_field(record, "session_id"),
+                source=_string_field(record, "source"),
+                sentiment_summary=_string_field(record, "sentiment_summary"),
+                confidence=confidence,
+                response_preview=_string_field(record, "response_preview"),
+                comment=_string_field(record, "comment"),
+                tools_used=_string_list_field(record, "tools_used"),
+                files_touched=_string_list_field(record, "files_touched"),
+                repo=_string_field(record, "repo"),
+                skill=_string_field(record, "skill"),
+                skill_candidates=_string_list_field(record, "skill_candidates"),
+                agent=_string_field(record, "agent"),
+                eval_results=eval_results if isinstance(eval_results, dict) else {},
+            )
+        )
     return entries
 
 
@@ -696,11 +714,8 @@ def _apply_pai_settings_env() -> None:
         pass
 
 
-LAST_LLM_PROVIDER: str | None = None
-_OPENCODE_DISABLED = False
-
-
 LAST_LLM_PROVIDER: Optional[str] = None
+_OPENCODE_DISABLED = False
 
 def call_llm(
     prompt: str,
@@ -838,9 +853,8 @@ def _call_llm_opencode(
         return None
     # Ensure max_tokens is at least 128 for reasoning models
     max_tokens = max(max_tokens, 128)
-    client_kwargs = {"api_" + "key": oai_token, "base_url": base_url}
-    client = OpenAI(**client_kwargs)
-    messages: list[dict] = []
+    client = OpenAI(api_key=oai_token, base_url=base_url)
+    messages: list[dict[str, str]] = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
@@ -862,7 +876,7 @@ def _call_llm_haiku(
     system: str = "",
 ) -> Optional[str]:
     """Legacy Anthropic Haiku path (expensive; only if PAI_BACKGROUND_LLM_PROVIDER=haiku)."""
-    from anthropic import AnthropicVertex
+    from anthropic import AnthropicVertex  # type: ignore[import-not-found]
 
     m = model or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5@20251001")
     kwargs: dict = {

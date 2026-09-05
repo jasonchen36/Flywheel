@@ -24,10 +24,9 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from harness_paths import BUNGRAPH_DB, DIAGNOSTICS, STATE
+from state_io import append_jsonl, atomic_write_json, atomic_write_text
 
 SCORES = STATE / "effectiveness_scores.json"
 ACE = STATE / "ace_playbook.json"
@@ -115,9 +114,7 @@ def queue_graphiti_episode(name: str, body: str, dry: bool) -> None:
     if dry:
         print(f"[dry-run] queue graphiti episode {name!r} ({len(body)} chars)")
         return
-    STATE.mkdir(parents=True, exist_ok=True)
-    with PENDING_GRAPHITI.open("a") as f:
-        f.write(json.dumps(rec) + "\n")
+    append_jsonl(PENDING_GRAPHITI, rec)
 
 
 def spawn_bungraph(args: list[str], dry: bool, wait: bool) -> None:
@@ -259,10 +256,8 @@ def main() -> int:
         "",
     ]
     if not dry:
-        STATE.mkdir(parents=True, exist_ok=True)
-        GRAPH_PREFLIGHT.write_text("\n".join(preflight_lines))
+        atomic_write_text(GRAPH_PREFLIGHT, "\n".join(preflight_lines))
 
-    DIAG.mkdir(parents=True, exist_ok=True)
     report = {
         "ts": now_iso(),
         "triplets_spawned": n_trip,
@@ -276,26 +271,9 @@ def main() -> int:
         "wait": wait,
     }
     if not dry:
-        (DIAG / f"sync_graph_memory_{d}.json").write_text(json.dumps(report, indent=2))
+        atomic_write_json(DIAG / f"sync_graph_memory_{d}.json", report)
     print(json.dumps(report, indent=2))
 
-    # Drain pending queue into live Graphiti Neo4j via MCP HTTP (always-on :8000).
-    # Non-fatal: failures leave items in the queue for next SessionEnd.
-    if not dry:
-        flush_script = Path(__file__).resolve().parent / "flush_graphiti_pending.py"
-        if flush_script.exists():
-            try:
-                fr = subprocess.run(
-                    [sys.executable, str(flush_script)],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                print(fr.stdout or "")
-                if fr.returncode != 0 and fr.stderr:
-                    print(f"[flush_graphiti_pending] rc={fr.returncode} {fr.stderr[:300]}")
-            except Exception as e:
-                print(f"[flush_graphiti_pending] skip: {e}")
     return 0
 
 

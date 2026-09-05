@@ -1019,11 +1019,13 @@ def build_report(entries: list[RatingEntry], rows: list[dict], registry: dict,
         "| eval | pattern | fired | passed | failed | fail-rate |",
         "|---|---|---|---|---|---|",
     ]
-    for e in EVALS:
-        a = applied_ct[e.id]
-        fr = (failed_ct[e.id] / a) if a else 0.0
-        lines.append(f"| {e.id} | {e.pattern} | {a} | {passed_ct[e.id]} | "
-                     f"{failed_ct[e.id]} | {fr:.2f} |")
+    for eval_case in EVALS:
+        applied = applied_ct[eval_case.id]
+        failure_rate = (failed_ct[eval_case.id] / applied) if applied else 0.0
+        lines.append(
+            f"| {eval_case.id} | {eval_case.pattern} | {applied} | "
+            f"{passed_ct[eval_case.id]} | {failed_ct[eval_case.id]} | {failure_rate:.2f} |"
+        )
 
     lines += ["", "## Coverage",
               "Patterns with an eval: " + (", ".join(sorted(covered)) or "(none)")]

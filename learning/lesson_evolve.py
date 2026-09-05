@@ -56,6 +56,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import append_jsonl, load_jsonl_objects, rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import call_llm, _apply_pai_settings_env, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
@@ -92,24 +93,12 @@ def escalation_verdict(s: dict) -> str:
 
 
 def load_variants() -> list[dict]:
-    if not VARIANTS_FILE.exists():
-        return []
-    out = []
-    for line in VARIANTS_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(VARIANTS_FILE).records
 
 
 def append_variants(records: list[dict]) -> None:
-    VARIANTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(VARIANTS_FILE, "a") as f:
-        for r in records:
-            f.write(json.dumps(r) + "\n")
+    for record in records:
+        append_jsonl(VARIANTS_FILE, record)
 
 
 def last_mutation_date(variants: list[dict], pattern: str) -> str | None:
@@ -158,24 +147,11 @@ def generate_variants(pattern: str, failing_rule: str, n: int) -> list[str]:
 
 
 def load_review_queue() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    out = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(REVIEW_FILE).records
 
 
 def write_review_queue(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(REVIEW_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def main() -> int:

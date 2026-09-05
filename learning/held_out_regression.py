@@ -33,11 +33,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import load_jsonl_objects, rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -55,24 +55,11 @@ NEW_PATTERN_FLOOR = 0.10  # pattern never seen before D, now at least this rate 
 
 
 def load_review_queue() -> list[dict]:
-    if not REVIEW_FILE.exists():
-        return []
-    out = []
-    for line in REVIEW_FILE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return out
+    return load_jsonl_objects(REVIEW_FILE).records
 
 
 def write_review_queue(records: list[dict]) -> None:
-    REVIEW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(REVIEW_FILE, "w") as f:
-        for rec in records:
-            f.write(json.dumps(rec) + "\n")
+    rewrite_jsonl(REVIEW_FILE, records)
 
 
 def main() -> int:
