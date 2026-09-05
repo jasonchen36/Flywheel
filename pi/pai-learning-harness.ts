@@ -17,12 +17,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   existsSync,
   readFileSync,
-  appendFileSync,
   mkdirSync,
   writeFileSync,
   readdirSync,
 } from "node:fs";
 import { join } from "node:path";
+import { appendJsonl } from "../runtime/state-io";
 
 const HOME = process.env.HOME!;
 const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(HOME, ".claude");
@@ -73,7 +73,7 @@ function ensureDir(dir: string): void {
 
 function writeRating(entry: Record<string, unknown>): void {
   ensureDir(SIGNALS_DIR);
-  appendFileSync(RATINGS_FILE, JSON.stringify(entry) + "\n", "utf-8");
+  appendJsonl(RATINGS_FILE, entry);
 }
 
 function writeTurnState(state: Record<string, unknown>): void {

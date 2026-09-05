@@ -25,7 +25,12 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import DIAGNOSTICS, PROJECTS_DIR, STATE
-from state_io import append_jsonl, atomic_write_json
+from state_io import (
+    append_jsonl_unlocked,
+    atomic_write_json,
+    exclusive_locks,
+    load_jsonl_objects,
+)
 
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 LAST_RESPONSE = STATE / "last-response.txt"
@@ -116,8 +121,8 @@ def find_latest_session(explicit: Path | None = None) -> Path | None:
 
 def extract_session_signals(path: Path, max_assistant_chars: int = 12000) -> dict:
     """Pull tools + trailing assistant text from a Claude session jsonl."""
-    tools: list[str] = []
-    texts: list[str] = []
+    tool_groups: list[list[str]] = []
+    text_groups: list[list[str]] = []
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError as e:
@@ -131,26 +136,34 @@ def extract_session_signals(path: Path, max_assistant_chars: int = 12000) -> dic
             d = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if d.get("type") != "assistant":
+        if not isinstance(d, dict) or d.get("type") != "assistant":
             continue
         msg = d.get("message") or {}
+        if not isinstance(msg, dict):
+            continue
         content = msg.get("content")
         if not isinstance(content, list):
             continue
+        message_tools: list[str] = []
+        message_texts: list[str] = []
         for b in content:
             if not isinstance(b, dict):
                 continue
             if b.get("type") == "tool_use" and isinstance(b.get("name"), str):
-                tools.append(b["name"])
+                message_tools.append(b["name"])
             if b.get("type") == "text" and isinstance(b.get("text"), str):
                 t = b["text"].strip()
                 if t:
-                    texts.append(t)
-        if sum(len(t) for t in texts) >= max_assistant_chars:
+                    message_texts.append(t)
+        if message_tools:
+            tool_groups.append(message_tools)
+        if message_texts:
+            text_groups.append(message_texts)
+        if sum(len(text) for group in text_groups for text in group) >= max_assistant_chars:
             break
 
-    texts.reverse()  # chronological among collected
-    tools.reverse()
+    tools = [tool for group in reversed(tool_groups) for tool in group]
+    texts = [text for group in reversed(text_groups) for text in group]
     text = "\n\n".join(texts)
     if len(text) > max_assistant_chars:
         text = text[-max_assistant_chars:]
@@ -204,7 +217,17 @@ def compress_episode(text: str, max_chars: int = 3500) -> str:
     return body
 
 
-def queue_episode(name: str, body: str, source_description: str, dry: bool) -> None:
+def content_hash(body: str) -> str:
+    return hashlib.sha256(body[:800].encode()).hexdigest()[:16]
+
+
+def queue_episode(
+    name: str,
+    body: str,
+    source_description: str,
+    digest: str,
+    dry: bool,
+) -> bool:
     rec = {
         "ts": now_iso(),
         "name": name,
@@ -214,43 +237,38 @@ def queue_episode(name: str, body: str, source_description: str, dry: bool) -> N
         "group_id": "main",
         "status": "pending",
         "origin": "session_graphiti_autoseed",
+        "content_hash": digest,
     }
     if dry:
         print(f"[dry-run] would queue {name} ({len(body)} chars)")
-        return
-    append_jsonl(PENDING, rec)
+        return True
+    archive = STATE / "graphiti_flushed_archive.jsonl"
+    with exclusive_locks((PENDING, archive)):
+        if already_queued_similar(digest):
+            return False
+        append_jsonl_unlocked(PENDING, rec)
+    return True
 
 
-def already_queued_similar(body: str) -> bool:
-    """Avoid re-queueing same content in last archive/pending."""
-    h = hashlib.sha256(body[:800].encode()).hexdigest()[:16]
+def already_queued_similar(digest: str) -> bool:
+    """Avoid re-queueing content already present in recent archive or pending state."""
+    footer = f"content_hash:{digest}"
     for path in (PENDING, STATE / "graphiti_flushed_archive.jsonl"):
-        if not path.exists():
-            continue
-        try:
-            for line in path.read_text().splitlines()[-200:]:
-                if not line.strip():
-                    continue
-                try:
-                    d = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                b = d.get("episode_body") or ""
-                if hashlib.sha256(b[:800].encode()).hexdigest()[:16] == h:
-                    return True
-                if d.get("content_hash") == h:
-                    return True
-        except OSError:
-            continue
+        for record in load_jsonl_objects(path).records[-200:]:
+            if record.get("content_hash") == digest:
+                return True
+            body = record.get("episode_body")
+            if isinstance(body, str) and footer in body:
+                return True
     return False
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--session", type=Path, default=None)
     ap.add_argument("--max-episodes", type=int, default=2)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     report: dict = {
         "ts": now_iso(),
@@ -260,7 +278,7 @@ def main() -> int:
     }
 
     sess = find_latest_session(args.session)
-    candidates: list[tuple[str, str, str]] = []  # name, body, desc
+    candidates: list[tuple[str, str, str, str]] = []  # name, body, desc, hash
 
     if sess:
         report["session"] = str(sess)
@@ -275,7 +293,8 @@ def main() -> int:
             elif is_durable(text) and (
                 sig.get("research_n", 0) >= 1 or len(DURABLE_RE.findall(text)) >= 5
             ):
-                body = compress_episode(text)
+                excerpt = compress_episode(text)
+                digest = content_hash(excerpt)
                 sid = sess.stem[:8]
                 name = f"session-autoseed-{today()}-{sid}"
                 header = (
@@ -285,7 +304,12 @@ def main() -> int:
                     f"(or not detected in tail). Durable excerpts:\n\n"
                 )
                 candidates.append(
-                    (name, header + body, f"session_graphiti_autoseed {sess.name}")
+                    (
+                        name,
+                        header + excerpt,
+                        f"session_graphiti_autoseed {sess.name}",
+                        digest,
+                    )
                 )
             else:
                 report["skipped"].append("session_not_durable_or_low_signal")
@@ -297,33 +321,33 @@ def main() -> int:
         except OSError:
             lr = ""
         if is_durable(lr):
-            body = compress_episode(lr, max_chars=2500)
+            excerpt = compress_episode(lr, max_chars=2500)
+            digest = content_hash(excerpt)
             name = f"last-response-autoseed-{today()}"
             header = (
                 f"Auto-seeded from last-response.txt cache at {now_iso()}.\n\n"
             )
             candidates.append(
-                (name, header + body, "session_graphiti_autoseed last-response")
+                (
+                    name,
+                    header + excerpt,
+                    "session_graphiti_autoseed last-response",
+                    digest,
+                )
             )
         else:
             report["skipped"].append("last_response_not_durable")
 
     # Cap + dedupe
     n = 0
-    for name, body, desc in candidates:
+    for name, body, desc, digest in candidates:
         if n >= args.max_episodes:
             break
-        if already_queued_similar(body):
+        if queue_episode(name, body, desc, digest, args.dry_run):
+            report["queued"].append(name)
+            n += 1
+        else:
             report["skipped"].append(f"dup:{name}")
-            continue
-        # attach content hash for future dedupe
-        if not args.dry_run:
-            # queue_episode doesn't store hash; embed in body footer
-            h = hashlib.sha256(body[:800].encode()).hexdigest()[:16]
-            body = body + f"\n\n<!-- content_hash:{h} -->"
-        queue_episode(name, body, desc, args.dry_run)
-        report["queued"].append(name)
-        n += 1
 
     if not candidates:
         report["skipped"].append("no_candidates")
@@ -334,5 +358,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

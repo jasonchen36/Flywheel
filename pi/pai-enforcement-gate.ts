@@ -14,11 +14,11 @@ import {
   existsSync,
   readFileSync,
   writeFileSync,
-  appendFileSync,
   mkdirSync,
 } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { appendJsonl } from "../runtime/state-io";
 
 const HOME = process.env.HOME!;
 const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(HOME, ".claude");
@@ -623,17 +623,14 @@ export default function paiEnforcementGate(pi: ExtensionAPI) {
     try {
       mkdirSync(join(PAI_DIR, "MEMORY", "LEARNING"), { recursive: true });
       for (const f of fires) {
-        appendFileSync(
-          ENFORCE_LOG,
-          JSON.stringify({
-            ts,
-            session: "pi-session",
-            agent: "pi",
-            pattern: f.pattern,
-            mode: f.mode,
-            blocked: f.mode === "block",
-          }) + "\n"
-        );
+        appendJsonl(ENFORCE_LOG, {
+          ts,
+          session: "pi-session",
+          agent: "pi",
+          pattern: f.pattern,
+          mode: f.mode,
+          blocked: f.mode === "block",
+        });
       }
     } catch {}
 

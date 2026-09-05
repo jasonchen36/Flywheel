@@ -132,9 +132,8 @@ def test_batch_append_round_trip_and_empty_batch(tmp_path: Path):
     assert [row["id"] for row in load_jsonl_objects(path).records] == [1, 2, 3, 4]
 
 
-def test_append_without_fcntl_uses_portable_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_single_append_and_unlocked_append_round_trip(tmp_path: Path):
     path = tmp_path / "events.jsonl"
-    monkeypatch.setattr(state_io, "fcntl", None)
     append_jsonl(path, {"id": 1})
     append_jsonl_unlocked(path, {"id": 2})
     assert [row["id"] for row in load_jsonl_objects(path).records] == [1, 2]
@@ -143,7 +142,7 @@ def test_append_without_fcntl_uses_portable_path(tmp_path: Path, monkeypatch: py
 def test_lock_helpers_use_stable_sorted_unique_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     first = tmp_path / "b.json"
     second = tmp_path / "a.json"
-    assert lock_path_for(first) == tmp_path / ".b.json.lock"
+    assert lock_path_for(first) == tmp_path / ".b.json.lock.d"
 
     entered: list[str] = []
 
@@ -164,8 +163,132 @@ def test_lock_helpers_use_stable_sorted_unique_paths(tmp_path: Path, monkeypatch
     assert entered == ["empty"]
 
 
-def test_real_exclusive_lock_creates_sidecar(tmp_path: Path):
+def test_real_exclusive_lock_owns_and_removes_directory(tmp_path: Path):
     target = tmp_path / "state.json"
     with exclusive_lock(target):
-        assert lock_path_for(target).exists()
-    assert lock_path_for(target).exists()
+        lock_path = lock_path_for(target)
+        assert lock_path.is_dir()
+        owner = state_io._read_lock_owner(lock_path)
+        assert owner is not None and owner[0] == state_io.os.getpid()
+    assert not lock_path_for(target).exists()
+
+
+@pytest.mark.parametrize(
+    ("timeout", "poll_interval", "stale_after"),
+    [(-1, 0, 0), (0, -1, 0), (0, 0, -1)],
+)
+def test_exclusive_lock_rejects_negative_timing(
+    tmp_path: Path, timeout: float, poll_interval: float, stale_after: float
+):
+    with pytest.raises(ValueError, match="non-negative"):
+        with exclusive_lock(
+            tmp_path / "state.json",
+            timeout=timeout,
+            poll_interval=poll_interval,
+            stale_after=stale_after,
+        ):
+            pass
+
+
+def test_exclusive_lock_times_out_for_live_owner(tmp_path: Path):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    lock_path.mkdir()
+    atomic_write_json(lock_path / "owner.json", {"pid": state_io.os.getpid(), "token": "other"})
+    state_io.os.utime(lock_path, (0, 0))
+    with pytest.raises(TimeoutError, match="timed out"):
+        with exclusive_lock(target, timeout=0, poll_interval=0, stale_after=0):
+            pass
+
+
+def test_exclusive_lock_recovers_dead_and_old_malformed_owners(tmp_path: Path):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    lock_path.mkdir()
+    atomic_write_json(lock_path / "owner.json", {"pid": 99999999, "token": "dead"})
+    with exclusive_lock(target, timeout=0):
+        assert state_io._read_lock_owner(lock_path)[0] == state_io.os.getpid()
+    lock_path.mkdir()
+    (lock_path / "owner.json").write_text("bad")
+    state_io.os.utime(lock_path, (0, 0))
+    with exclusive_lock(target, timeout=0, stale_after=0):
+        assert lock_path.exists()
+    assert not lock_path.exists()
+
+
+def test_exclusive_lock_cleans_up_failed_owner_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = tmp_path / "state.json"
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("owner write failed")
+
+    monkeypatch.setattr(state_io, "atomic_write_json", fail_write)
+    with pytest.raises(OSError, match="owner write failed"):
+        with exclusive_lock(target):
+            pass
+    assert not lock_path_for(target).exists()
+
+
+def test_exclusive_lock_does_not_remove_replaced_owner(tmp_path: Path):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    with exclusive_lock(target):
+        atomic_write_json(
+            lock_path / "owner.json",
+            {"pid": state_io.os.getpid(), "token": "replacement"},
+        )
+    assert lock_path.exists()
+    state_io._remove_lock(lock_path)
+
+
+def test_lock_owner_and_pid_helpers_cover_invalid_and_permission_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    lock_path = tmp_path / "lock.d"
+    assert state_io._read_lock_owner(lock_path) is None
+    lock_path.mkdir()
+    owner = lock_path / "owner.json"
+    for value in ("[]", '{"pid":"bad","token":"x"}', '{"pid":1,"token":""}'):
+        owner.write_text(value)
+        assert state_io._read_lock_owner(lock_path) is None
+
+    assert state_io._pid_alive(0) is False
+
+    def missing(_pid: int, _signal: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(state_io.os, "kill", missing)
+    assert state_io._pid_alive(123) is False
+
+    def denied(_pid: int, _signal: int) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(state_io.os, "kill", denied)
+    assert state_io._pid_alive(123) is True
+    assert state_io._lock_is_stale(tmp_path / "missing-lock", 10) is True
+
+    file_lock = tmp_path / "file.lock"
+    file_lock.write_text("legacy")
+    state_io._remove_lock(file_lock)
+    assert not file_lock.exists()
+
+
+def test_exclusive_lock_waits_for_then_acquires_released_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    lock_path.mkdir()
+    atomic_write_json(lock_path / "owner.json", {"pid": state_io.os.getpid(), "token": "other"})
+    slept: list[float] = []
+
+    def release_on_sleep(interval: float) -> None:
+        slept.append(interval)
+        state_io._remove_lock(lock_path)
+
+    monkeypatch.setattr(state_io.time, "sleep", release_on_sleep)
+    with exclusive_lock(target, timeout=1, poll_interval=0.01):
+        assert lock_path.exists()
+    assert slept == [0.01]

@@ -23,10 +23,11 @@
  */
 
 import { readHookInput, parseTranscriptFromInput } from './lib/hook-io';
-import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
+import { appendJsonl } from '../runtime/state-io';
 
 const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(homedir(), '.claude');
 const SCORES_JSON = join(PAI_DIR, 'MEMORY', 'STATE', 'effectiveness_scores.json');
@@ -506,10 +507,10 @@ async function main() {
   const ts = new Date().toISOString();
   try {
     for (const f of fires) {
-      appendFileSync(ENFORCE_LOG, JSON.stringify({
+      appendJsonl(ENFORCE_LOG, {
         ts, session: input.session_id, pattern: f.pattern,
         mode: f.mode, blocked: f.mode === 'block',
-      }) + '\n');
+      });
     }
   } catch {}
 

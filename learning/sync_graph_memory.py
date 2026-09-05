@@ -26,7 +26,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from harness_paths import BUNGRAPH_DB, DIAGNOSTICS, STATE
-from state_io import append_jsonl, atomic_write_json, atomic_write_text
+from state_io import append_jsonl, atomic_write_json, atomic_write_text, try_read_json_object
 
 SCORES = STATE / "effectiveness_scores.json"
 ACE = STATE / "ace_playbook.json"
@@ -44,22 +44,27 @@ def today() -> str:
 
 
 def load_scores() -> dict:
-    if not SCORES.exists():
-        return {}
-    try:
-        return json.loads(SCORES.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    data, _error = try_read_json_object(SCORES)
+    scores = data.get("scores")
+    escalate = data.get("escalate")
+    return {
+        **data,
+        "scores": {
+            str(pattern): value
+            for pattern, value in scores.items()
+            if isinstance(value, dict)
+        } if isinstance(scores, dict) else {},
+        "escalate": [str(pattern) for pattern in escalate if isinstance(pattern, str)]
+        if isinstance(escalate, list) else [],
+    }
 
 
 def load_ace_top(n: int = 5) -> list[dict]:
-    if not ACE.exists():
+    data, _error = try_read_json_object(ACE)
+    bullets = data.get("bullets")
+    if not isinstance(bullets, list):
         return []
-    try:
-        bullets = json.loads(ACE.read_text()).get("bullets") or []
-        return bullets[:n]
-    except (json.JSONDecodeError, OSError):
-        return []
+    return [bullet for bullet in bullets if isinstance(bullet, dict)][:n]
 
 
 def build_status_episode(scores: dict, escalate: list, ace: list[dict]) -> str:
@@ -117,20 +122,23 @@ def queue_graphiti_episode(name: str, body: str, dry: bool) -> None:
     append_jsonl(PENDING_GRAPHITI, rec)
 
 
-def spawn_bungraph(args: list[str], dry: bool, wait: bool) -> None:
+def spawn_bungraph(args: list[str], dry: bool, wait: bool) -> bool:
     if dry:
         print(f"[dry-run] bungraph {' '.join(args[:4])}...")
-        return
+        return False
     env = {**os.environ, "BUNGRAPH_DB_PATH": str(BUNGRAPH_DB)}
     try:
         if wait:
-            subprocess.run(
+            result = subprocess.run(
                 ["bunx", "bungraph", *args],
                 env=env,
                 capture_output=True,
                 text=True,
                 timeout=45,
             )
+            if result.returncode != 0:
+                print(f"[bungraph] command failed ({result.returncode}): {(result.stderr or '')[-300:]}")
+                return False
         else:
             subprocess.Popen(
                 ["bunx", "bungraph", *args],
@@ -139,11 +147,13 @@ def spawn_bungraph(args: list[str], dry: bool, wait: bool) -> None:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
-    except Exception as e:
-        print(f"[bungraph] spawn failed: {e}")
+        return True
+    except Exception as exc:
+        print(f"[bungraph] spawn failed: {exc}")
+        return False
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument(
@@ -151,7 +161,7 @@ def main() -> int:
         action="store_true",
         help="block on bungraph CLI (slow; default fire-and-forget)",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     dry = args.dry_run
     wait = args.wait
 
@@ -191,7 +201,7 @@ def main() -> int:
             f"(delta: {delta:+.4f}) as of {d} based on objective/subjective "
             f"session evaluations. obj={s.get('obj_verdict')} after_n={s.get('after_n')}."
         )
-        spawn_bungraph(
+        spawned = spawn_bungraph(
             [
                 "triplet",
                 f"lesson_{pattern}",
@@ -203,7 +213,8 @@ def main() -> int:
             dry,
             wait,
         )
-        n_trip += 1
+        if spawned:
+            n_trip += 1
 
     body = build_status_episode(data, escalate, ace)
     name = f"harness-status-{d}"
@@ -220,12 +231,12 @@ def main() -> int:
         queue_graphiti_episode(f"escalated-{pattern}-{d}", reg_body, dry)
 
     # One bungraph episode (fire-and-forget unless --wait)
-    spawn_bungraph(
+    episode_spawned = spawn_bungraph(
         ["add", body, "--name", name, "--source", "text"],
         dry,
         wait,
     )
-    n_ep = 0 if dry else 1
+    n_ep = int(episode_spawned)
 
     # Refresh SessionStart preflight (LoadContext + pai-learning-harness)
     preflight_lines = [
@@ -277,5 +288,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
