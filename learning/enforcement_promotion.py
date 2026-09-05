@@ -38,9 +38,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timedelta, timezone
+from harness_config import ConfigLoadResult, load_enforcement_config
 from harness_paths import HARNESS_HOME
-from state_io import load_jsonl_objects, rewrite_jsonl
+from review_store import enqueue_pending, load_reviews
 
 ENFORCE_LOG   = HARNESS_HOME / "MEMORY/LEARNING/enforcement_log.jsonl"
 CONFIG_JSON   = HARNESS_HOME / "MEMORY/STATE/enforcement_config.json"
@@ -56,13 +58,8 @@ DEFAULT_WINDOW_DAYS = 14
 DEFAULT_MIN_FIRES = 5   # fires within the window to trigger a review-queue candidate
 
 
-def load_config() -> dict:
-    if not CONFIG_JSON.exists():
-        return {"enabled": True, "overrides": {}}
-    try:
-        return json.loads(CONFIG_JSON.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {"enabled": True, "overrides": {}}
+def load_config() -> ConfigLoadResult:
+    return load_enforcement_config(CONFIG_JSON)
 
 
 def load_enforcement_log() -> list[dict]:
@@ -80,11 +77,7 @@ def load_enforcement_log() -> list[dict]:
 
 
 def load_review_queue() -> list[dict]:
-    return load_jsonl_objects(REVIEW_FILE).records
-
-
-def write_review_queue(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def main() -> int:
@@ -97,8 +90,12 @@ def main() -> int:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cutoff = datetime.now(timezone.utc) - timedelta(days=args.window_days)
 
-    cfg = load_config()
-    overrides = cfg.get("overrides", {})
+    config_result = load_config()
+    if not config_result.ok:
+        for error in config_result.errors:
+            print(f"[enforcement_promotion] invalid config: {error}", file=sys.stderr)
+        return 2
+    overrides = config_result.config.overrides
 
     log_rows = load_enforcement_log()
     review_records = load_review_queue()
@@ -148,23 +145,26 @@ def main() -> int:
         print("[dry-run] no files written")
         return 0
 
-    for c in candidates:
-        review_records.append({
-            "pattern": c["pattern"],
+    pending_rows = [
+        {
+            "pattern": candidate["pattern"],
             "detected_at": today,
-            "delta": None,           # not applicable — this queue entry isn't rating-driven
-            "after_n": c["fires_in_window"],
+            "delta": None,
+            "after_n": candidate["fires_in_window"],
             "obj_verdict": "n/a",
             "judge_verdict": "n/a",
             "status": "pending",
             "reviewed_at": None,
             "reviewer": None,
             "source": "enforcement_promotion",
-            "note": f"{c['fires_in_window']} fires in {c['window_days']}d (warn mode). "
-                    f"Approve to promote to 'block' in enforcement_config.json.",
-        })
-    write_review_queue(review_records)
-    print(f"[enforcement_promotion] Queued {len(candidates)} pattern(s) in "
+            "note": f"{candidate['fires_in_window']} fires in "
+                    f"{candidate['window_days']}d (warn mode). Approve to promote "
+                    "to 'block' in enforcement_config.json.",
+        }
+        for candidate in candidates
+    ]
+    added = enqueue_pending(REVIEW_FILE, pending_rows)
+    print(f"[enforcement_promotion] Queued {len(added)} pattern(s) in "
           f"pending_human_review.jsonl. Review with: python3 review_queue.py --list")
     return 0
 

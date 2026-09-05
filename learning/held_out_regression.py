@@ -37,7 +37,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import load_jsonl_objects, rewrite_jsonl
+from review_store import enqueue_pending, load_reviews
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -55,11 +55,7 @@ NEW_PATTERN_FLOOR = 0.10  # pattern never seen before D, now at least this rate 
 
 
 def load_review_queue() -> list[dict]:
-    return load_jsonl_objects(REVIEW_FILE).records
-
-
-def write_review_queue(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def main() -> int:
@@ -154,11 +150,11 @@ def main() -> int:
         if cur is None or f["delta"] > cur["delta"]:
             worst_by_lesson[f["offending_lesson"]] = f
 
-    queued = []
+    pending_rows: list[dict] = []
     for p, f in worst_by_lesson.items():
         if p in already:
             continue
-        records.append({
+        pending_rows.append({
             "pattern": p, "detected_at": today, "delta": f["delta"], "after_n": f["after_n"],
             "obj_verdict": "n/a", "judge_verdict": "n/a", "status": "pending",
             "reviewed_at": None, "reviewer": None, "source": "held_out_regression",
@@ -167,10 +163,9 @@ def main() -> int:
                     f"({f['before_rate']:.3f} -> {f['after_rate']:.3f}). Review whether the "
                     f"lesson text for '{p}' should be revised or reverted.",
         })
-        queued.append(p)
-
+    added = enqueue_pending(REVIEW_FILE, pending_rows)
+    queued = [record["pattern"] for record in added]
     if queued:
-        write_review_queue(records)
         print(f"[held_out_regression] Queued {len(queued)} lesson(s) for human review: {queued}")
     else:
         print("[held_out_regression] All flagged pairs already queued or reviewed.")

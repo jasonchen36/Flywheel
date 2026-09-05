@@ -7,24 +7,93 @@ HARNESS_HOME="${HARNESS_HOME:-$HOME/.claude}"
 LEARNING="$HARNESS_HOME/MEMORY/LEARNING"
 LOG_DIR="${HARNESS_LOG_DIR:-$LEARNING/DIAGNOSTICS/session-end}"
 STATUS_FILE="$LOG_DIR/latest.tsv"
+SUMMARY_FILE="$LOG_DIR/latest.json"
 SKIPPED_FILE="$LOG_DIR/skipped.tsv"
+SKIPPED_SUMMARY_FILE="$LOG_DIR/skipped.json"
 LOCK_FILE="$LOG_DIR/pipeline.lock"
 LOCK_DIR="$LOG_DIR/pipeline.lock.d"
 LOCK_KIND=""
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$BASHPID"
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RUN_STARTED_MS=0
+STAGE_TOTAL=0
+STAGE_FAILED=0
+FAILED_STAGES=()
+LEARNING_PRESENT=1
+if [ ! -d "$LEARNING" ]; then
+  LEARNING_PRESENT=0
+fi
 export HARNESS_HOME
 
+mkdir -p "$LOG_DIR"
+
+epoch_millis() {
+  local value
+  value=$(date +%s%3N 2>/dev/null || true)
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$(( $(date +%s) * 1000 ))"
+  fi
+}
+
+RUN_STARTED_MS=$(epoch_millis)
+
+record_status() {
+  local stage="$1"
+  local status="$2"
+  local code="$3"
+  local duration_ms="${4:-0}"
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$stage" "$status" "$code" "$duration_ms" \
+    >> "$STATUS_FILE"
+}
+
+write_run_summary() {
+  local status="$1"
+  local finished_at finished_ms duration_ms failed_json tmp
+  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  finished_ms=$(epoch_millis)
+  duration_ms=$((finished_ms - RUN_STARTED_MS))
+  failed_json=""
+  if [ "${#FAILED_STAGES[@]}" -gt 0 ]; then
+    local quoted=()
+    local stage
+    for stage in "${FAILED_STAGES[@]}"; do
+      quoted+=("\"$stage\"")
+    done
+    failed_json=$(IFS=,; printf '%s' "${quoted[*]}")
+  fi
+  tmp="$SUMMARY_FILE.tmp.$BASHPID"
+  printf '{\n  "run_id": "%s",\n  "status": "%s",\n  "started_at": "%s",\n  "finished_at": "%s",\n  "duration_ms": %s,\n  "stage_total": %s,\n  "stage_failed": %s,\n  "failed_stages": [%s]\n}\n' \
+    "$RUN_ID" "$status" "$RUN_STARTED_AT" "$finished_at" "$duration_ms" \
+    "$STAGE_TOTAL" "$STAGE_FAILED" "$failed_json" > "$tmp"
+  mv "$tmp" "$SUMMARY_FILE"
+}
+
+write_skipped_summary() {
+  local tmp="$SKIPPED_SUMMARY_FILE.tmp.$BASHPID"
+  printf '{\n  "run_id": "%s",\n  "status": "already-running",\n  "timestamp": "%s",\n  "pid": %s\n}\n' \
+    "$RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$BASHPID" > "$tmp"
+  mv "$tmp" "$SKIPPED_SUMMARY_FILE"
+}
+
 if [ "${PAI_SELF_IMPROVE_DISABLED:-0}" = "1" ]; then
-  mkdir -p "$LOG_DIR"
-  printf '%s\tdisabled\t0\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATUS_FILE"
+  : > "$STATUS_FILE"
+  record_status pipeline disabled 0 0
+  write_run_summary disabled
   exit 0
 fi
 
-if [ ! -d "$LEARNING" ]; then
+if [ "$LEARNING_PRESENT" -eq 0 ]; then
+  : > "$STATUS_FILE"
+  STAGE_FAILED=1
+  FAILED_STAGES+=("learning_directory")
+  record_status pipeline failed 1 0
+  write_run_summary failed
   printf 'Flywheel learning directory does not exist: %s\n' "$LEARNING" >&2
   exit 1
 fi
-
-mkdir -p "$LOG_DIR"
 
 if [ -n "${HARNESS_PYTHON:-}" ]; then
   read -r -a PY <<< "$HARNESS_PYTHON"
@@ -34,17 +103,10 @@ else
   PY=(python3)
 fi
 
-record_status() {
-  local stage="$1"
-  local status="$2"
-  local code="$3"
-  printf '%s\t%s\t%s\t%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$stage" "$status" "$code" >> "$STATUS_FILE"
-}
-
 record_skipped_run() {
   printf '%s\t%s\t%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "already-running" "$BASHPID" >> "$SKIPPED_FILE"
+  write_skipped_summary
 }
 
 acquire_pipeline_lock() {
@@ -85,25 +147,41 @@ run_stage() {
   local stage="$1"
   shift
   local log="$LOG_DIR/$stage.log"
+  local started_ms finished_ms duration_ms code status
+  started_ms=$(epoch_millis)
+  STAGE_TOTAL=$((STAGE_TOTAL + 1))
   if "$@" > "$log" 2>&1; then
-    record_status "$stage" ok 0
-    return 0
+    code=0
+    status=ok
+  else
+    code=$?
+    status=failed
+    STAGE_FAILED=$((STAGE_FAILED + 1))
+    FAILED_STAGES+=("$stage")
   fi
-  local code=$?
-  record_status "$stage" failed "$code"
+  finished_ms=$(epoch_millis)
+  duration_ms=$((finished_ms - started_ms))
+  record_status "$stage" "$status" "$code" "$duration_ms"
   return "$code"
 }
 
 run_surface_gate_selftest() {
   local log="$LOG_DIR/surface_gate_selftest.log"
+  local started_ms finished_ms duration_ms code
+  started_ms=$(epoch_millis)
+  STAGE_TOTAL=$((STAGE_TOTAL + 1))
   "${PY[@]}" surface_gate.py "$HARNESS_HOME/hooks/claude-session-end" > "$log" 2>&1
-  local code=$?
+  code=$?
+  finished_ms=$(epoch_millis)
+  duration_ms=$((finished_ms - started_ms))
   if [ "$code" -eq 1 ]; then
     printf '%s\n' '[surface_gate] enforcement OK — hooks path denied' >> "$log"
-    record_status surface_gate_selftest ok 0
+    record_status surface_gate_selftest ok 0 "$duration_ms"
   else
+    STAGE_FAILED=$((STAGE_FAILED + 1))
+    FAILED_STAGES+=("surface_gate_selftest")
     printf '[surface_gate] WARN: expected deny (exit 1), got %s\n' "$code" >> "$log"
-    record_status surface_gate_selftest failed "$code"
+    record_status surface_gate_selftest failed "$code" "$duration_ms"
   fi
 }
 
@@ -114,9 +192,12 @@ run_pipeline() {
   trap 'if [ "$LOCK_KIND" = "directory" ]; then rm -rf "$LOCK_DIR"; fi' EXIT
 
   : > "$STATUS_FILE"
-  record_status pipeline started 0
+  record_status pipeline started 0 0
   cd "$LEARNING" || {
-    record_status pipeline failed 1
+    STAGE_FAILED=$((STAGE_FAILED + 1))
+    FAILED_STAGES+=("learning_directory")
+    record_status pipeline failed 1 0
+    write_run_summary failed
     return 1
   }
 
@@ -146,7 +227,13 @@ run_pipeline() {
   run_stage flush_graphiti "${PY[@]}" flush_graphiti_pending.py --limit 50 || true
   run_stage harness_changelog "${PY[@]}" harness_changelog.py || true
   run_surface_gate_selftest
-  record_status pipeline completed 0
+
+  local final_status=completed
+  if [ "$STAGE_FAILED" -gt 0 ]; then
+    final_status=completed_with_failures
+  fi
+  record_status pipeline completed 0 "$(( $(epoch_millis) - RUN_STARTED_MS ))"
+  write_run_summary "$final_status"
 }
 
 run_pipeline >/dev/null 2>&1 &

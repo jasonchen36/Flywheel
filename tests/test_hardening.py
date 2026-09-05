@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -249,3 +250,159 @@ def test_changelog_observes_lesson_changes(tmp_path: Path):
     assert second.returncode == 0, second.stderr
     changelog = (harness / "MEMORY" / "STATE" / "harness_changelog.md").read_text()
     assert "lessons/lesson_autogen_test.md" in changelog
+
+
+def test_healthcheck_rejects_malformed_enforcement_config(tmp_path: Path):
+    harness, install = run_installer(tmp_path)
+    assert install.returncode == 0, install.stderr
+    config = harness / "MEMORY" / "STATE" / "enforcement_config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "enabled": "yes",
+                "overrides": {
+                    "blind_retry": "explode",
+                    "typo_pattern": "block",
+                },
+            }
+        )
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(harness / "MEMORY" / "LEARNING" / "harness_healthcheck.py"),
+            "--json",
+        ],
+        env={**os.environ, "HARNESS_HOME": str(harness), "HOME": str(tmp_path / "home")},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    report = json.loads(proc.stdout)
+    enforcement = report["checks"]["enforcement"]
+    assert enforcement["valid"] is False
+    assert enforcement["enabled"] is True
+    assert enforcement["errors"] == [
+        "enabled must be a boolean",
+        "invalid mode for blind_retry: 'explode'; expected off, warn, or block",
+        "unknown enforcement override: 'typo_pattern'",
+    ]
+    assert any("invalid enforcement_config.json" in error for error in report["errors"])
+
+
+def test_healthcheck_reports_review_queue_state_machine_problems(tmp_path: Path):
+    harness, install = run_installer(tmp_path)
+    assert install.returncode == 0, install.stderr
+    review_file = harness / "MEMORY" / "LEARNING" / "SIGNALS" / "pending_human_review.jsonl"
+    review_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"pattern": "failed", "status": "action_failed"}),
+                json.dumps({"pattern": "running", "status": "processing"}),
+                json.dumps({"pattern": "mystery", "status": "unknown"}),
+                "not-json",
+            ]
+        )
+        + "\n"
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(harness / "MEMORY" / "LEARNING" / "harness_healthcheck.py"),
+            "--json",
+        ],
+        env={**os.environ, "HARNESS_HOME": str(harness), "HOME": str(tmp_path / "home")},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    report = json.loads(proc.stdout)
+    review = report["checks"]["review_queue"]
+    assert review["counts"] == {"action_failed": 1, "processing": 1, "unknown": 1}
+    assert review["invalid_lines"] == [4]
+    assert review["failed_patterns"] == ["failed"]
+    assert review["processing_patterns"] == ["running"]
+    assert review["unknown_statuses"] == ["unknown"]
+    assert any("--retry-failed" in warning for warning in report["warnings"])
+    assert any("still processing" in warning for warning in report["warnings"])
+
+
+def _run_enforcement_hook(harness: Path, payload: dict) -> subprocess.CompletedProcess[str]:
+    hooks = harness / "hooks"
+    if not hooks.exists():
+        shutil.copytree(ROOT / "hooks", hooks)
+    parser = harness / "PAI" / "Tools" / "TranscriptParser.ts"
+    parser.parent.mkdir(parents=True, exist_ok=True)
+    parser.write_text(
+        "export interface ParsedTranscript { messages: unknown[]; lastMessage: string; }\n"
+        "export function parseTranscript(_path: string): ParsedTranscript {\n"
+        "  return { messages: [], lastMessage: '' };\n"
+        "}\n"
+    )
+    return subprocess.run(
+        ["bun", str(hooks / "EnforcementGate.hook.ts")],
+        env={**os.environ, "HARNESS_HOME": str(harness), "HOME": str(harness.parent)},
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+
+
+def test_enforcement_hook_ignores_invalid_modes_fail_safely(tmp_path: Path):
+    harness = tmp_path / "harness"
+    config = harness / "MEMORY" / "STATE" / "enforcement_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "enabled": "yes",
+                "overrides": {
+                    "unverified_completion": "explode",
+                    "claim_evidence": "off",
+                    "typo_pattern": "off",
+                },
+            }
+        )
+    )
+    proc = _run_enforcement_hook(
+        harness,
+        {
+            "hook_event_name": "Stop",
+            "session_id": "test",
+            "last_assistant_message": "Done.",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    output = json.loads(proc.stdout)
+    assert output["decision"] == "block"
+    assert "unverified_completion" in output["reason"]
+
+
+def test_enforcement_hook_honors_valid_disabled_config(tmp_path: Path):
+    harness = tmp_path / "harness"
+    config = harness / "MEMORY" / "STATE" / "enforcement_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"enabled": False, "overrides": {}}))
+    proc = _run_enforcement_hook(
+        harness,
+        {"hook_event_name": "Stop", "last_assistant_message": "Done."},
+    )
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+
+
+def test_enforcement_hook_does_not_overwrite_malformed_existing_config(tmp_path: Path):
+    harness = tmp_path / "harness"
+    config = harness / "MEMORY" / "STATE" / "enforcement_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text("{")
+    proc = _run_enforcement_hook(
+        harness,
+        {"hook_event_name": "Stop", "last_assistant_message": ""},
+    )
+    assert proc.returncode == 0
+    assert config.read_text() == "{"

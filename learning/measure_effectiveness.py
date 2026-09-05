@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import Any
 
 from harness_paths import BUNGRAPH_DB, HARNESS_HOME
-from state_io import append_jsonl, atomic_write_json, atomic_write_text, rewrite_jsonl
+from review_store import enqueue_pending, expire_pending, load_reviews
+from state_io import append_jsonl, atomic_write_json, atomic_write_text
 
 # Reuse the EXACT classifier the generator uses — no attribution drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -370,35 +371,28 @@ def main() -> int:
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Load human review queue. Patterns with status=pending (within 14-day window) are
-    # gated from hard escalation until approved or auto-expired. Auto-expire updates status
-    # in-memory so the write step persists it.
+    # Pending, processing, and failed-action reviews remain gated. Overdue pending
+    # rows are treated as expired for this decision and committed transactionally below.
     REVIEW_EXPIRE_DAYS = 14
     _pending_review: set[str] = set()
-    _review_records: list[dict] = []
-    if REVIEW_FILE.exists():
-        for _line in REVIEW_FILE.read_text().splitlines():
-            if not _line.strip():
-                continue
-            try:
-                _rec = json.loads(_line)
-            except json.JSONDecodeError:
-                continue
-            if _rec.get("status") == "pending":
-                _detected = _rec.get("detected_at", "")
-                try:
-                    _days_old = (datetime.strptime(today, "%Y-%m-%d") -
-                                 datetime.strptime(_detected, "%Y-%m-%d")).days
-                except ValueError:
-                    _days_old = 999
-                if _days_old <= REVIEW_EXPIRE_DAYS:
-                    _pending_review.add(_rec["pattern"])
-                    _review_records.append(_rec)
-                else:
-                    _review_records.append({**_rec, "status": "auto-escalated",
-                                            "reviewed_at": today, "reviewer": "auto-expire"})
-            else:
-                _review_records.append(_rec)
+    for _rec in load_reviews(REVIEW_FILE):
+        _status = _rec.get("status")
+        _pattern = _rec.get("pattern")
+        if not isinstance(_pattern, str):
+            continue
+        if _status in {"processing", "action_failed"}:
+            _pending_review.add(_pattern)
+            continue
+        if _status != "pending":
+            continue
+        _detected = _rec.get("detected_at", "")
+        try:
+            _days_old = (datetime.strptime(today, "%Y-%m-%d") -
+                         datetime.strptime(_detected, "%Y-%m-%d")).days
+        except (TypeError, ValueError):
+            _days_old = REVIEW_EXPIRE_DAYS + 1
+        if _days_old <= REVIEW_EXPIRE_DAYS:
+            _pending_review.add(_pattern)
 
     # Enforceable patterns already have detectors + ALWAYS_ON/block config —
     # never gate them behind first-time human review (2026-07-09: UC kept
@@ -539,27 +533,29 @@ def main() -> int:
     for r in results:
         push_to_bungraph(r["pattern"], escalation_verdict(r), r["delta"], today)
 
-    # Human review queue — rewrite to persist auto-expires, append new first-time regressions.
-    if _review_records or first_time_regressed:
-        review_rows = list(_review_records)
-        review_rows.extend(
-            {
-                "pattern": result["pattern"], "detected_at": today,
-                "delta": result["delta"], "after_n": result["after_n"],
-                "obj_verdict": result["obj_verdict"],
-                "judge_verdict": result["judge_verdict"],
-                "status": "pending", "reviewed_at": None, "reviewer": None,
-            }
-            for result in first_time_regressed
-        )
-        rewrite_jsonl(REVIEW_FILE, review_rows)
-        auto_expired_pats = [rec["pattern"] for rec in _review_records
-                             if rec.get("reviewer") == "auto-expire"]
-        if auto_expired_pats:
-            print(f"Auto-escalated (>14 days no review): {auto_expired_pats}")
-        if first_time_regressed:
-            print(f"Queued for human review (+{len(first_time_regressed)}): "
-                  f"{[r['pattern'] for r in first_time_regressed]}")
+    # Human review queue — expire and enqueue under transactional store locks.
+    auto_expired_pats = expire_pending(
+        REVIEW_FILE,
+        today=datetime.strptime(today, "%Y-%m-%d").date(),
+        max_age_days=REVIEW_EXPIRE_DAYS,
+    )
+    review_rows = [
+        {
+            "pattern": result["pattern"], "detected_at": today,
+            "delta": result["delta"], "after_n": result["after_n"],
+            "obj_verdict": result["obj_verdict"],
+            "judge_verdict": result["judge_verdict"],
+            "status": "pending", "reviewed_at": None, "reviewer": None,
+            "source": "base",
+        }
+        for result in first_time_regressed
+    ]
+    added_reviews = enqueue_pending(REVIEW_FILE, review_rows)
+    if auto_expired_pats:
+        print(f"Auto-escalated (>14 days no review): {auto_expired_pats}")
+    if added_reviews:
+        print(f"Queued for human review (+{len(added_reviews)}): "
+              f"{[record['pattern'] for record in added_reviews]}")
 
     # Voice alerts: first-time regressions (urgent/new) then known regressions (informational).
     if first_time_regressed:

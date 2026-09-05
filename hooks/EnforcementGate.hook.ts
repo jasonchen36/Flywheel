@@ -272,14 +272,40 @@ const DETECTORS: Record<string, Detector> = {
 
 interface Config { enabled: boolean; overrides: Record<string, Mode>; }
 
+const VALID_MODES = new Set<Mode>(['off', 'warn', 'block']);
+const KNOWN_OVERRIDE_KEYS = new Set([
+  ...Object.keys(DETECTORS),
+  'silent_completion',
+  'graphiti_bypassed',
+  'graphiti_writeback_skipped',
+  'claim_evidence',
+]);
+
+function normalizeConfig(value: unknown): Config {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { enabled: true, overrides: {} };
+  }
+  const raw = value as Record<string, unknown>;
+  const overrides: Record<string, Mode> = {};
+  if (raw.overrides && typeof raw.overrides === 'object' && !Array.isArray(raw.overrides)) {
+    for (const [key, mode] of Object.entries(raw.overrides as Record<string, unknown>)) {
+      if (KNOWN_OVERRIDE_KEYS.has(key) && typeof mode === 'string' && VALID_MODES.has(mode as Mode)) {
+        overrides[key] = mode as Mode;
+      }
+    }
+  }
+  return { enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true, overrides };
+}
+
 function loadConfig(): Config {
   if (existsSync(CONFIG_JSON)) {
     try {
-      const c = JSON.parse(readFileSync(CONFIG_JSON, 'utf-8'));
-      return { enabled: c.enabled !== false, overrides: c.overrides || {} };
-    } catch {}
+      return normalizeConfig(JSON.parse(readFileSync(CONFIG_JSON, 'utf-8')));
+    } catch {
+      return { enabled: true, overrides: {} };
+    }
   }
-  // Seed a default config on first run so the user has a control surface.
+  // Seed a default config only when missing; never overwrite malformed user state.
   const def = {
     enabled: true,
     overrides: {},

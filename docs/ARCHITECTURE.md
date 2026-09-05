@@ -35,7 +35,9 @@ Stages are intentionally sequential. The small loss in wall-clock parallelism pr
 
 - ALWAYS_ON structural gates
 - `effectiveness_scores.json` escalate list
-- `enforcement_config.json` overrides
+- validated `enforcement_config.json` overrides
+
+`learning/harness_config.py` defines the accepted boolean and `off|warn|block` schema. Python health checks reject unknown keys or modes. Claude and pi hooks independently normalize the same known key set, ignore invalid values fail-safely, and never overwrite an existing malformed configuration.
 
 ## Eval gates
 
@@ -51,6 +53,16 @@ Stages are intentionally sequential. The small loss in wall-clock parallelism pr
 
 `learning/state_io.py` owns reusable state operations. Whole-file updates use same-directory temporary files, `fsync`, and atomic replacement; JSONL readers isolate malformed rows; JSONL appenders coordinate through stable sidecar locks. Queue producers that update both Graphiti pending work and an ingestion ledger acquire both locks in sorted order and re-check the ledger inside the transaction.
 
+## Transactional review workflow
+
+`learning/review_store.py` owns `pending_human_review.jsonl`. Producers enqueue semantic `(pattern, source)` keys under one lock and cannot replace records written by another process. Approval first changes a record from `pending` to `processing`, runs the source-specific side effect outside the queue lock, and then finalizes it as `approved` or `action_failed`. Failed actions retain an error and attempt count and require explicit `--retry-failed`; stale processing claims recover to `action_failed`. Rejections are atomic and never run approval side effects. Pending, processing, and failed actions remain gated from escalation.
+
 ## SessionEnd observability
 
-The SessionEnd hook remains non-blocking, but each stage writes a dedicated log and appends an explicit status row under `MEMORY/LEARNING/DIAGNOSTICS/session-end/`. The latest aggregate status is recorded in `latest.tsv`; overlapping invocations are recorded in `skipped.tsv`. The native lock uses `flock` when available and an atomic directory lock with stale-PID recovery otherwise.
+The SessionEnd hook remains non-blocking, but each stage writes a dedicated log and appends a five-column status row—timestamp, stage, status, exit code, and duration in milliseconds—under `MEMORY/LEARNING/DIAGNOSTICS/session-end/`. Atomic `latest.json` summarizes total duration, stage count, failure count, and failed stage names. `skipped.json` records overlapping invocations without replacing the active run summary. The native lock uses `flock` when available and an atomic directory lock with stale-PID recovery otherwise.
+
+## Quality thresholds
+
+The complete test command enforces an 18% branch-aware repository coverage floor, up from the third-pass baseline of 11%. Shared durable state, transactional review, and validated configuration modules independently require 100% statement and branch coverage.
+
+`held_out_suite.py --gate` is the deterministic behavioral gate. `agent_rollouts.py --gate` is a live-provider semantic supplement: empty responses or provider exceptions are recorded as skipped infrastructure checks, persisted in the latest diagnostic report, and never misclassified as harness behavior failures or written into performance history.

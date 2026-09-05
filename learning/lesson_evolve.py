@@ -56,7 +56,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import append_jsonl, load_jsonl_objects, rewrite_jsonl
+from review_store import enqueue_pending, load_reviews
+from state_io import append_jsonl, load_jsonl_objects
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import call_llm, _apply_pai_settings_env, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
@@ -147,11 +148,7 @@ def generate_variants(pattern: str, failing_rule: str, n: int) -> list[str]:
 
 
 def load_review_queue() -> list[dict]:
-    return load_jsonl_objects(REVIEW_FILE).records
-
-
-def write_review_queue(records: list[dict]) -> None:
-    rewrite_jsonl(REVIEW_FILE, records)
+    return load_reviews(REVIEW_FILE)
 
 
 def main() -> int:
@@ -196,7 +193,7 @@ def main() -> int:
                        if r.get("status") == "pending" and r.get("source") == "lesson_evolve"}
 
     new_variant_records = []
-    queued = []
+    pending_rows: list[dict] = []
     for pattern, verdict, rule in eligible:
         lines.append(f"## {pattern} (verdict: {verdict})")
         lines.append(f"Current (failing) instruction: {rule}")
@@ -218,7 +215,7 @@ def main() -> int:
         if pattern in already_queued:
             continue
         candidate_lines = "\n".join(f"  [{i}] {c}" for i, c in enumerate(candidates))
-        review_records.append({
+        pending_rows.append({
             "pattern": pattern, "detected_at": today, "delta": None,
             "after_n": 0, "obj_verdict": verdict, "judge_verdict": verdict,
             "status": "pending", "reviewed_at": None, "reviewer": None,
@@ -228,7 +225,6 @@ def main() -> int:
                     f"Approve to apply variant 0 (or `--variant N` for another), "
                     f"which backs up the current lesson and resets its effectiveness window.",
         })
-        queued.append(pattern)
 
     report = "\n".join(lines) + "\n"
     print(report)
@@ -237,8 +233,9 @@ def main() -> int:
 
     if new_variant_records:
         append_variants(new_variant_records)
+    added = enqueue_pending(REVIEW_FILE, pending_rows)
+    queued = [record["pattern"] for record in added]
     if queued:
-        write_review_queue(review_records)
         print(f"[lesson_evolve] Queued {len(queued)} pattern(s) for review: {queued}")
     return 0
 

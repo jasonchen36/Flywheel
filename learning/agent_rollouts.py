@@ -30,6 +30,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
+from state_io import append_jsonl, atomic_write_json, atomic_write_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evals import score_text  # noqa: E402
@@ -117,7 +118,26 @@ def run_scenario(scenario: dict, playbook: str, use_llm: bool) -> dict:
             "errors": ["--no-llm"],
             "response": "",
         }
-    response = call_llm(prompt, max_tokens=700) or ""
+    try:
+        response = call_llm(prompt, max_tokens=700) or ""
+    except Exception as exc:
+        return {
+            "id": scenario["id"],
+            "split": scenario.get("split"),
+            "ok": None,
+            "skipped": True,
+            "errors": [f"LLM unavailable: {type(exc).__name__}: {exc}"],
+            "response": "",
+        }
+    if not response.strip():
+        return {
+            "id": scenario["id"],
+            "split": scenario.get("split"),
+            "ok": None,
+            "skipped": True,
+            "errors": ["LLM unavailable or empty response"],
+            "response": "",
+        }
     ok, errors = rubric_ok(response, scenario)
     return {
         "id": scenario["id"],
@@ -223,7 +243,7 @@ def write_report(summary: dict, results: list[dict], gate: dict | None) -> Path:
     for r in results:
         status = "SKIP" if r.get("skipped") else ("PASS" if r.get("ok") else "FAIL")
         lines.append(f"- {status} `{r['id']}` errors={r.get('errors')}")
-    path.write_text("\n".join(lines) + "\n")
+    atomic_write_text(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -250,7 +270,7 @@ def main() -> int:
         rec = run_scenario(sc, playbook, use_llm=not args.no_llm)
         results.append(rec)
         if not args.dry_run and rec.get("response"):
-            (TRANSCRIPTS / f"{rec['id']}.txt").write_text(rec["response"])
+            atomic_write_text(TRANSCRIPTS / f"{rec['id']}.txt", rec["response"])
         flag = "SKIP" if rec.get("skipped") else ("PASS" if rec.get("ok") else "FAIL")
         print(f"  [{flag}] {rec['id']}"
               + (f" — {'; '.join(rec.get('errors') or [])}" if rec.get("errors") else ""))
@@ -270,36 +290,34 @@ def main() -> int:
         print(f"[agent_rollouts] vs baseline gate_pass={gate.get('gate_pass')} "
               f"d_out_delta={gate.get('d_out_delta')}")
 
-    if summary.get("skipped_all"):
-        print("[agent_rollouts] all skipped (--no-llm or LLM unavailable)")
-        if args.gate:
-            # Soft: no LLM ≠ harness regression
-            return 0
-        return 0
-
     if not args.dry_run:
         STATE.mkdir(parents=True, exist_ok=True)
-        LAST.write_text(json.dumps({"summary": summary, "gate": gate, "results": [
+        atomic_write_json(LAST, {"summary": summary, "gate": gate, "results": [
             {k: v for k, v in r.items() if k != "response"} for r in results
-        ]}, indent=2))
+        ]})
         report = write_report(summary, results, gate)
         print(f"[agent_rollouts] report → {report}")
-        with open(HISTORY, "a") as f:
-            f.write(json.dumps({
+        if not summary.get("skipped_all"):
+            append_jsonl(HISTORY, {
                 "ts": summary["ts"],
                 "pass_rate": summary["pass_rate"],
                 "d_in": summary.get("d_in"),
                 "d_out": summary.get("d_out"),
                 "accept": summary["accept"],
                 "gate_pass": (gate or {}).get("gate_pass"),
-            }) + "\n")
-        if args.update_baseline or (not BASELINE.exists() and summary["accept"]):
-            BASELINE.write_text(json.dumps(summary, indent=2))
-            print(f"[agent_rollouts] baseline → {BASELINE}")
-        elif args.update_baseline and not summary["accept"]:
-            # Still allow freeze after intentional review
-            BASELINE.write_text(json.dumps(summary, indent=2))
-            print("[agent_rollouts] baseline FORCE-updated (suite not clean)")
+            })
+            if args.update_baseline or (not BASELINE.exists() and summary["accept"]):
+                atomic_write_json(BASELINE, summary)
+                print(f"[agent_rollouts] baseline → {BASELINE}")
+            elif args.update_baseline and not summary["accept"]:
+                # Still allow freeze after intentional review.
+                atomic_write_json(BASELINE, summary)
+                print("[agent_rollouts] baseline FORCE-updated (suite not clean)")
+
+    if summary.get("skipped_all"):
+        print("[agent_rollouts] all skipped (--no-llm or LLM unavailable)")
+        # Soft: no LLM is infrastructure unavailability, not harness regression.
+        return 0
 
     if args.gate:
         if summary["pass_rate"] < args.min_pass_rate:

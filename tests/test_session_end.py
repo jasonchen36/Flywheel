@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -55,6 +56,7 @@ def _make_fake_python(tmp_path: Path) -> Path:
         "script=$1\n"
         "printf '%s\\n' \"$script\" >> \"$TRACE_FILE\"\n"
         "if [ \"$script\" = \"ratings_hygiene.py\" ]; then sleep \"${STAGE_SLEEP:-0}\"; fi\n"
+        "if [ \"$script\" = \"${FAIL_SCRIPT:-}\" ]; then exit 7; fi\n"
         "if [ \"$script\" = \"surface_gate.py\" ]; then exit 1; fi\n"
         "exit 0\n"
     )
@@ -100,6 +102,18 @@ def test_session_end_serializes_stages_and_skips_overlap(
     assert trace.read_text().splitlines() == EXPECTED_STAGES
     assert "pipeline\tfailed" not in completed
     assert completed.count("\tpipeline\tcompleted\t0") == 1
+    assert all(len(line.split("\t")) == 5 for line in completed.splitlines())
+    summary_path = status.parent / "latest.json"
+    _wait_for(summary_path, '"status": "completed"')
+    summary = json.loads(summary_path.read_text())
+    assert summary["stage_total"] == len(EXPECTED_STAGES)
+    assert summary["stage_failed"] == 0
+    assert summary["failed_stages"] == []
+    assert summary["duration_ms"] >= 500
+    skipped_summary = json.loads((status.parent / "skipped.json").read_text())
+    assert skipped_summary["status"] == "already-running"
+    assert isinstance(skipped_summary["pid"], int)
+    assert list(status.parent.glob("*.tmp.*")) == []
 
 
 def test_session_end_disabled_does_not_start_pipeline(tmp_path: Path):
@@ -115,7 +129,11 @@ def test_session_end_disabled_does_not_start_pipeline(tmp_path: Path):
     )
     assert result.returncode == 0
     status = harness / "MEMORY" / "LEARNING" / "DIAGNOSTICS" / "session-end" / "latest.tsv"
-    assert "\tdisabled\t0" in status.read_text()
+    assert "\tdisabled\t0\t0" in status.read_text()
+    summary = json.loads((status.parent / "latest.json").read_text())
+    assert summary["status"] == "disabled"
+    assert summary["stage_total"] == 0
+    assert summary["stage_failed"] == 0
 
 
 def test_session_end_recovers_stale_directory_lock(tmp_path: Path):
@@ -141,4 +159,54 @@ def test_session_end_recovers_stale_directory_lock(tmp_path: Path):
     status = log_dir / "latest.tsv"
     _wait_for(status, "pipeline\tcompleted")
     assert trace.read_text().splitlines() == EXPECTED_STAGES
+    deadline = time.monotonic() + 5
+    while lock_dir.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
     assert not lock_dir.exists()
+
+
+def test_session_end_summary_records_failed_stage_and_continues(tmp_path: Path):
+    harness = tmp_path / "harness"
+    learning = harness / "MEMORY" / "LEARNING"
+    learning.mkdir(parents=True)
+    trace = tmp_path / "trace.txt"
+    env = {
+        **os.environ,
+        "HARNESS_HOME": str(harness),
+        "HARNESS_PYTHON": str(_make_fake_python(tmp_path)),
+        "TRACE_FILE": str(trace),
+        "FAIL_SCRIPT": "evals.py",
+    }
+    result = subprocess.run(
+        ["bash", str(SESSION_END)], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    log_dir = learning / "DIAGNOSTICS" / "session-end"
+    summary_path = log_dir / "latest.json"
+    _wait_for(summary_path, '"status": "completed_with_failures"')
+    summary = json.loads(summary_path.read_text())
+    assert summary["stage_total"] == len(EXPECTED_STAGES)
+    assert summary["stage_failed"] == 1
+    assert summary["failed_stages"] == ["evals"]
+    assert trace.read_text().splitlines() == EXPECTED_STAGES
+    status_lines = (log_dir / "latest.tsv").read_text().splitlines()
+    eval_line = next(line for line in status_lines if "\tevals\t" in line)
+    assert eval_line.split("\t")[2:4] == ["failed", "7"]
+    assert int(eval_line.split("\t")[4]) >= 0
+
+
+def test_session_end_missing_learning_directory_writes_failed_summary(tmp_path: Path):
+    harness = tmp_path / "harness"
+    env = {**os.environ, "HARNESS_HOME": str(harness)}
+    result = subprocess.run(
+        ["bash", str(SESSION_END)], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 1
+    assert "does not exist" in result.stderr
+    log_dir = harness / "MEMORY" / "LEARNING" / "DIAGNOSTICS" / "session-end"
+    summary = json.loads((log_dir / "latest.json").read_text())
+    assert summary["status"] == "failed"
+    assert summary["stage_total"] == 0
+    assert summary["stage_failed"] == 1
+    assert summary["failed_stages"] == ["learning_directory"]
+    assert list(log_dir.glob("*.tmp.*")) == []
