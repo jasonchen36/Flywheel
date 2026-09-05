@@ -46,7 +46,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from review_store import enqueue_pending, load_reviews
+from review_store import enqueue_pending
 from state_io import atomic_write_text, load_jsonl_objects, rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -76,10 +76,6 @@ def write_ledger(records: list[dict]) -> None:
     rewrite_jsonl(CANDIDATES_FILE, records)
 
 
-def load_review_queue() -> list[dict]:
-    return load_reviews(REVIEW_FILE)
-
-
 def suggest_keywords(label: str, summaries: list[str], top_n: int = 6) -> list[str]:
     """Derive a starter keyword list for a promoted pattern: the label's own words plus
     the most frequent non-stopword tokens across its matched sentiment summaries. A human
@@ -95,11 +91,14 @@ def suggest_keywords(label: str, summaries: list[str], top_n: int = 6) -> list[s
     return label_words + top[:top_n]
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--min-occurrences", type=int, default=MIN_OCCURRENCES)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.min_occurrences <= 0:
+        print("[pattern_promotion] min-occurrences must be positive")
+        return 2
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -118,9 +117,15 @@ def main() -> int:
     # Merge into the durable ledger, keyed by session_id (idempotent — same entry always
     # gets its latest label, never double-counted).
     ledger = load_ledger()
-    by_session = {r["session_id"]: r for r in ledger}
+    by_session = {
+        str(record["session_id"]): record
+        for record in ledger
+        if isinstance(record.get("session_id"), str) and record["session_id"]
+    }
     id_to_entry = {e.session_id: e for e in other_entries}
     for sid, label in label_map.items():
+        if not isinstance(sid, str) or not isinstance(label, str) or not valid_pattern(label):
+            continue
         representative = id_to_entry.get(sid)
         by_session[sid] = {
             "session_id": sid, "label": label, "labeled_at": today,
@@ -137,8 +142,13 @@ def main() -> int:
     # labels are skipped so they don't get re-queued every run).
     by_label: dict[str, list[dict]] = defaultdict(list)
     for rec in new_ledger:
-        if rec.get("status") == "pending":
-            by_label[rec["label"]].append(rec)
+        record_label = rec.get("label")
+        if (
+            rec.get("status") == "pending"
+            and isinstance(record_label, str)
+            and valid_pattern(record_label)
+        ):
+            by_label[record_label].append(rec)
 
     candidates = {label: recs for label, recs in by_label.items()
                  if len(recs) >= args.min_occurrences}
@@ -150,9 +160,10 @@ def main() -> int:
         lines += ["| label | occurrences | avg rating | suggested keywords |",
                   "|---|---|---|---|"]
         for label, recs in sorted(candidates.items(), key=lambda kv: -len(kv[1])):
-            avg = sum(r["rating"] for r in recs if r.get("rating")) / max(
-                1, sum(1 for r in recs if r.get("rating")))
-            kws = suggest_keywords(label, [r["sentiment_summary"] for r in recs])
+            ratings = [r["rating"] for r in recs if isinstance(r.get("rating"), (int, float))]
+            avg = sum(ratings) / max(1, len(ratings))
+            summaries = [str(r.get("sentiment_summary") or "") for r in recs]
+            kws = suggest_keywords(label, summaries)
             lines.append(f"| {label} | {len(recs)} | {avg:.1f} | {', '.join(kws)} |")
     else:
         lines.append("No labels have crossed the promotion threshold yet.")
@@ -169,16 +180,12 @@ def main() -> int:
         return 0
 
     # Queue promotion candidates for human review — same queue/UX as lessons.
-    review_records = load_review_queue()
-    already_queued = {r["pattern"] for r in review_records
-                       if r.get("status") == "pending" and r.get("source") == "pattern_promotion"}
     pending_rows: list[dict] = []
     for label, recs in candidates.items():
-        if label in already_queued:
-            continue
-        kws = suggest_keywords(label, [r["sentiment_summary"] for r in recs])
-        avg = sum(r["rating"] for r in recs if r.get("rating")) / max(
-            1, sum(1 for r in recs if r.get("rating")))
+        summaries = [str(r.get("sentiment_summary") or "") for r in recs]
+        kws = suggest_keywords(label, summaries)
+        ratings = [r["rating"] for r in recs if isinstance(r.get("rating"), (int, float))]
+        avg = sum(ratings) / max(1, len(ratings))
         pending_rows.append({
             "pattern": label, "detected_at": today, "delta": None,
             "after_n": len(recs), "obj_verdict": "n/a", "judge_verdict": "n/a",
@@ -196,11 +203,24 @@ def main() -> int:
     return 0
 
 
+def valid_pattern(pattern: str) -> bool:
+    return bool(re.fullmatch(r"[a-z][a-z0-9_]*", pattern))
+
+
 def promote_to_taxonomy(pattern: str, keywords: list[str]) -> bool:
     """Mechanically append ONE new PATTERN_KEYWORDS entry to self_improve.py. Called by
     review_queue.py on --approve for source=pattern_promotion records. Never rewrites or
     reorders existing entries — inserts a new dict entry immediately before the closing
     brace of PATTERN_KEYWORDS, tagged with a comment noting it was promoted (and when)."""
+    if not valid_pattern(pattern):
+        return False
+    normalized_keywords = list(dict.fromkeys(
+        keyword.strip().lower()
+        for keyword in keywords
+        if isinstance(keyword, str) and keyword.strip()
+    ))
+    if not normalized_keywords:
+        return False
     text = SELF_IMPROVE_PY.read_text()
     marker = "PATTERN_KEYWORDS: dict[str, list[str]] = {"
     idx = text.find(marker)
@@ -210,16 +230,18 @@ def promote_to_taxonomy(pattern: str, keywords: list[str]) -> bool:
     close_idx = text.find("\n}\n", idx)
     if close_idx == -1:
         return False
+    if f"    {json.dumps(pattern)}:" in text[idx:close_idx]:
+        return True
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    kw_literal = ", ".join(json.dumps(k) for k in keywords)
+    kw_literal = ", ".join(json.dumps(keyword) for keyword in normalized_keywords)
     new_entry = (
         f'    # promoted {today} via pattern_promotion.py (LLM-discovered, human-ratified)\n'
-        f'    "{pattern}": [{kw_literal}],\n'
+        f"    {json.dumps(pattern)}: [{kw_literal}],\n"
     )
     new_text = text[:close_idx + 1] + new_entry + text[close_idx + 1:]
     atomic_write_text(SELF_IMPROVE_PY, new_text)
     return True
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

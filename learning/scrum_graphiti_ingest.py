@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""scrum_graphiti_ingest.py — continuous tribal knowledge: new scrum summaries → Graphiti.
+"""Queue high-signal scrum summaries for Graphiti ingestion.
 
-Watches ~/.claude/scrum-recordings/*.txt.summary.md, queues high-signal files
-not yet in graphiti_flushed_archive.jsonl, then optionally flushes.
+Watches ``HARNESS_SCRUM_DIR`` for ``*_scrum.txt.summary.md`` files and
+optionally flushes committed rows with the active Python interpreter.
 
 Usage:
-  pyenv exec python3 scrum_graphiti_ingest.py --once
-  pyenv exec python3 scrum_graphiti_ingest.py --once --flush
-  pyenv exec python3 scrum_graphiti_ingest.py --once --flush --limit 15
+  python3 scrum_graphiti_ingest.py --once --flush --limit 15
 """
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-import re
-import subprocess
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from harness_paths import LEARNING, SCRUM_DIR, STATE
-from state_io import append_jsonl_unlocked, atomic_write_json, exclusive_locks
+
+from harness_paths import GRAPHITI_GROUP_ID, LEARNING, SCRUM_DIR, STATE
+from summary_ingest import (
+    SummaryIngestConfig,
+    flushed_names as _flushed_names,
+    high_signal as _high_signal,
+    load_ledger as _load_ledger,
+    now_iso as _now_iso,
+    run,
+)
 
 REC = SCRUM_DIR
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
@@ -30,127 +29,45 @@ MIN_BYTES = 900
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """Compatibility wrapper for existing callers."""
+    return _now_iso()
 
 
 def load_ledger() -> dict:
-    if LEDGER.exists():
-        try:
-            return json.loads(LEDGER.read_text())
-        except Exception:
-            pass
-    return {"ingested": {}}
+    """Compatibility wrapper for existing callers."""
+    return _load_ledger(LEDGER)
 
 
 def flushed_names() -> set[str]:
-    names: set[str] = set()
-    if not ARCHIVE.exists():
-        return names
-    for line in ARCHIVE.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            names.add(json.loads(line).get("name") or "")
-        except Exception:
-            continue
-    return names
+    """Compatibility wrapper for existing callers."""
+    return _flushed_names(ARCHIVE)
 
 
 def high_signal(path: Path, text: str) -> bool:
-    if path.stat().st_size < MIN_BYTES:
-        return False
-    bullets = len(re.findall(r"^- ", text, re.M))
-    if bullets < 4:
-        return False
-    if text.count("None detected") >= 6:
-        return False
-    return True
+    """Compatibility wrapper for existing callers."""
+    return _high_signal(path, text, MIN_BYTES)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--once", action="store_true", help="scan once and queue new")
-    ap.add_argument("--flush", action="store_true", help="run flush_graphiti_pending after queue")
-    ap.add_argument("--limit", type=int, default=20)
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-    if not args.once:
-        args.once = True
-
-    ledger = load_ledger()
-    ingested = ledger.setdefault("ingested", {})
-    already = flushed_names() | set(ingested.keys())
-    queued = []
-    for path in sorted(REC.glob("*_scrum.txt.summary.md")):
-        text = path.read_text(errors="replace")
-        if not high_signal(path, text):
-            continue
-        stem = path.name.replace(".txt.summary.md", "")
-        name = f"scrum-summary-{stem}"
-        h = hashlib.sha256(text.encode()).hexdigest()[:16]
-        key = f"{name}:{h}"
-        if name in already or key in ingested:
-            continue
-        body = (
-            f"Scrum transcript extract (tribal knowledge & team context).\n"
-            f"File: {path}\n"
-            f"PROVENANCE & HEDGING DIRECTIVE:\n"
-            f"- Preserve speaker identity, role, and authority.\n"
-            f"- Tag tentative proposals, brainstorming, or unconfirmed remarks as [TENTATIVE_PROPOSAL].\n"
-            f"- Only tag confirmed decisions or established team conventions as [RATIFIED_DECISION].\n"
-            f"- Store underlying rationale, trade-offs, and constraints for decisions when present.\n\n"
-            f"{text[:3500]}"
-        )
-        row = {
-            "ts": now_iso(),
-            "name": name,
-            "episode_body": body,
-            "source": "text",
-            "source_description": "scrum_graphiti_ingest continuous",
-            "group_id": "main",
-            "status": "pending",
-        }
-        queued.append((key, name, row))
-        if len(queued) >= args.limit:
-            break
-
-    report = {"ts": now_iso(), "candidates_queued": len(queued), "names": [n for _, n, _ in queued]}
-    if args.dry_run:
-        print(json.dumps(report, indent=2))
-        return 0
-
-    if queued:
-        committed_names: list[str] = []
-        with exclusive_locks((PENDING, LEDGER)):
-            current = load_ledger()
-            current_ingested = current.setdefault("ingested", {})
-            for key, name, row in queued:
-                if key in current_ingested:
-                    continue
-                append_jsonl_unlocked(PENDING, row)
-                current_ingested[key] = {"name": name, "ts": now_iso()}
-                committed_names.append(name)
-            atomic_write_json(LEDGER, current)
-        report["candidates_queued"] = len(committed_names)
-        report["names"] = committed_names
-    print(json.dumps(report, indent=2))
-
-    if args.flush and queued:
-        cmd = [
-            "pyenv",
-            "exec",
-            "python3",
-            str(LEARNING / "flush_graphiti_pending.py"),
-            "--limit",
-            str(max(args.limit, 50)),
-        ]
-        r = subprocess.run(cmd, cwd=str(LEARNING), capture_output=True, text=True)
-        print(r.stdout)
-        if r.returncode not in (0,):
-            print(r.stderr, file=sys.stderr)
-            return r.returncode
-    return 0
+def config() -> SummaryIngestConfig:
+    return SummaryIngestConfig(
+        root=REC,
+        glob="*_scrum.txt.summary.md",
+        suffix=".txt.summary.md",
+        name_prefix="scrum-summary-",
+        transcript_label="Scrum",
+        source_description="scrum_graphiti_ingest continuous",
+        group_id=GRAPHITI_GROUP_ID,
+        pending=PENDING,
+        archive=ARCHIVE,
+        ledger=LEDGER,
+        learning_dir=LEARNING,
+        min_bytes=MIN_BYTES,
+    )
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    return run(config(), argv)
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

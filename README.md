@@ -23,7 +23,7 @@ This is the **employer-agnostic core**: ratings → lessons → effectiveness �
 | **$pass^k$ Reliability Benchmark** | Evaluates multi-step agent success across all $k$ attempts ($pass^k$) rather than $pass@k$ |
 | **RatingCapture** | Explicit 1–10 + optional implicit sentiment → `ratings.jsonl` |
 | **Human Policy Ratification** | `review_queue.py` gates candidate rules so a human approves input policy once before hard enforcement |
-| **Meeting / Scrum → Graphiti** | `scrum_graphiti_ingest.py` & `meeting_summary_ingest.py` preserve speaker authority & tag `[TENTATIVE]` vs `[RATIFIED]` |
+| **Meeting / Scrum → Graphiti** | Thin host commands share one transactional ingestion foundation, preserve speaker authority, and tag `[TENTATIVE_PROPOSAL]` vs `[RATIFIED_DECISION]` |
 
 ---
 
@@ -73,6 +73,7 @@ $HARNESS_HOME/   # default ~/.claude
       review_queue.py          # Human policy ratification review queue
       scrum_graphiti_ingest.py # Provenance-aware scrum transcript ingest
       meeting_summary_ingest.py# Provenance-aware meeting summary ingest
+      summary_ingest.py        # Shared transactional ingestion foundation
     STATE/             # scores, ACE playbook, enforcement_config, lesson_archive
     lessons/           # lesson_autogen_*.md
   hooks/               # TypeScript / bash hooks (EnforcementGate, StopHooks, hook-io)
@@ -153,7 +154,7 @@ make install-dev
 make check
 ```
 
-The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 39% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Durable state I/O, transactional review storage, validated configuration, surface permissions, ratings hygiene, and config-only enforcement promotion each require 100% statement and branch coverage. Direct lifecycle tests cover held-out fixture validation, self-harness result reuse, session auto-seeding, and graph synchronization without live network or model dependencies. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 49% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Nine critical modules independently require 100% statement and branch coverage: durable state I/O, transactional review storage, validated configuration, surface permissions, ratings hygiene, config-only enforcement promotion, shared summary ingestion, lesson deduplication, and pattern promotion. Direct lifecycle tests additionally cover held-out fixture validation, self-harness result reuse, session auto-seeding, graph synchronization, lesson retirement, and skill burn-in without live network or model dependencies. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 
