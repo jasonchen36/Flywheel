@@ -22,17 +22,14 @@ import argparse
 import hashlib
 import json
 import re
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import DIAGNOSTICS, PROJECTS_DIR, STATE
 
-HOME = Path.home()
-STATE = HOME / ".claude/MEMORY/STATE"
-LEARNING = HOME / ".claude/MEMORY/LEARNING"
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 LAST_RESPONSE = STATE / "last-response.txt"
-PROJECTS = HOME / ".claude/projects"
-DIAG = LEARNING / "DIAGNOSTICS"
+PROJECTS = PROJECTS_DIR
+DIAG = DIAGNOSTICS
 
 # Durable-signal language (decisions, schema, root cause, deploys, contracts)
 DURABLE_RE = re.compile(

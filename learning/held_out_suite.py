@@ -26,17 +26,18 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from evals import EVALS, score_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 FIXTURES = ROOT / "held_out_suite" / "fixtures"
-STATE = Path.home() / ".claude/MEMORY/STATE"
-DIAG = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
+STATE = HARNESS_HOME / "MEMORY/STATE"
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 BASELINE_FILE = STATE / "held_out_suite_baseline.json"
 LAST_FILE = STATE / "held_out_suite_last.json"
-HISTORY = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS" / "held_out_suite_history.jsonl"
+HISTORY = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS" / "held_out_suite_history.jsonl"
 
 
 def now_iso() -> str:

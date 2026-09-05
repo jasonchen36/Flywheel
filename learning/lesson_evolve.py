@@ -55,16 +55,17 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import call_llm, _apply_pai_settings_env, MEMORY_DIR, DIAGNOSTICS  # noqa: E402
 _apply_pai_settings_env()
 
-STATE_DIR = Path.home() / ".claude/MEMORY/STATE"
+STATE_DIR = HARNESS_HOME / "MEMORY/STATE"
 SCORES_JSON = STATE_DIR / "effectiveness_scores.json"
-VARIANTS_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/lesson_variants.jsonl"
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
-BACKUP_DIR = Path.home() / ".claude/MEMORY/STATE/lesson_evolve_backups"
+VARIANTS_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/lesson_variants.jsonl"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+BACKUP_DIR = HARNESS_HOME / "MEMORY/STATE/lesson_evolve_backups"
 
 N_VARIANTS = 2
 MUTATION_COOLDOWN_DAYS = 7

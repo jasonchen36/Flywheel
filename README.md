@@ -44,14 +44,17 @@ cd graphiti && cp .env.example .env   # add GOOGLE_API_KEY
 
 ## Quick Install
 
+Flywheel requires **Python 3.11+** and **Bun** for TypeScript hooks. The installer uses `rsync` when available and falls back to `tar` automatically.
+
 ```bash
 git clone git@github.com:jasonchen36/Flywheel.git
 cd Flywheel
+python3 -m pip install -r requirements.txt
 ./install.sh
-# or: HARNESS_HOME=~/.claude ./install.sh
+# Custom location: HARNESS_HOME=~/my-flywheel ./install.sh
 ```
 
-Then wire hooks (see `templates/settings.hooks.snippet.json`) into your Claude Code `settings.json`.
+The installer is idempotent for seeded state files and backs up existing hooks before replacing them. Then wire hooks from `templates/settings.hooks.snippet.json` into your Claude Code `settings.json`. When using a custom location, export the same `HARNESS_HOME` for the host process; Python stages, hooks, and pi extensions all honor it.
 
 ---
 
@@ -80,9 +83,11 @@ $HARNESS_HOME/   # default ~/.claude
 
 ## Runtime Requirements
 
-- Python 3.11+ (pyenv recommended)
+- Python 3.11+ and the packages in `requirements.txt`
+- Bun for Claude-compatible TypeScript hooks
+- `rsync` or `tar` for installation; `tar` is the automatic fallback
 - Optional: OpenCode (`deepseek-v4-flash`), Vertex Gemini, or Anthropic for background LLM labels (`PAI_BACKGROUND_LLM_PROVIDER=opencode`)
-- Optional: [Graphiti MCP](https://github.com/getzep/graphiti) on `GRAPHITI_MCP_URL` (default `http://127.0.0.1:8000/mcp`)
+- Optional: [Graphiti MCP](https://github.com/getzep/graphiti) on an HTTP(S) `/mcp` endpoint configured through `GRAPHITI_MCP_URL`
 - Claude Code hooks host (or pi extensions under `pi/`)
 
 ---
@@ -93,7 +98,7 @@ $HARNESS_HOME/   # default ~/.claude
 cd ~/.claude/MEMORY/LEARNING
 
 # Check harness health, background LLM, and active skill autofixes
-python3 self_harness_status.py
+python3 harness_healthcheck.py
 
 # Run binary eval suite dry-run
 python3 evals.py --dry-run
@@ -119,6 +124,21 @@ python3 held_out_suite.py --gate
 | pi | `pi/*.ts` extensions + SessionEnd via Claude-compatible bridge |
 
 Tag ratings with `agent: claude|grok|pi` (hooks set this when possible).
+
+---
+
+## Development and Validation
+
+Install the development tools and run the same quality gate used by CI:
+
+```bash
+make install-dev
+make check
+```
+
+The gate runs Ruff correctness checks, Python compilation, the complete pytest suite, Bandit, dependency auditing, and ShellCheck. Individual targets are available as `make test`, `make lint`, `make security`, and `make shellcheck`.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 
 ---
 

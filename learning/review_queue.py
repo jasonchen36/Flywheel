@@ -26,10 +26,11 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
-SCORES_FILE = Path.home() / ".claude/MEMORY/STATE/effectiveness_scores.json"
-AUDIT_FILE  = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/review_audit.jsonl"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
+AUDIT_FILE  = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/review_audit.jsonl"
 REVIEW_EXPIRE_DAYS = 14
 AUDIT_MAX_LINES    = 5000   # rotate audit log when it exceeds this line count
 
@@ -228,7 +229,7 @@ def cmd_history(pattern: str, records: list[dict], today: str) -> int:
 
     sc = scores.get(pattern)
     if sc:
-        print(f"\nCurrent effectiveness scores:")
+        print("\nCurrent effectiveness scores:")
         print(f"  verdict={sc.get('verdict')} obj={sc.get('obj_verdict')} jdg={sc.get('judge_verdict')}")
         print(f"  delta={sc.get('delta', 'n/a'):+.3f} obj_delta={sc.get('obj_delta', 'n/a')} "
               f"jdg_delta={sc.get('judge_delta', 'n/a')}")
@@ -285,7 +286,7 @@ def cmd_approve_reject(records: list[dict], target: str, action: str,
     print(f"{action.capitalize()}: {target} (reviewed_at: {today})")
     if action == "rejected":
         if is_config_only:
-            print(f"Left at 'warn' in enforcement_config.json — no lesson to revise for config-only patterns.")
+            print("Left at 'warn' in enforcement_config.json — no lesson to revise for config-only patterns.")
         elif is_pattern_promo:
             print(f"Pattern '{target}' NOT promoted to PATTERN_KEYWORDS. Ledger entries stay pending "
                   f"(will re-queue on next pattern_promotion.py run unless you edit "

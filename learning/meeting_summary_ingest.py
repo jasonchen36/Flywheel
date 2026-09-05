@@ -13,21 +13,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-HOME = Path.home()
-HARNESS = Path(os.environ.get("HARNESS_HOME", HOME / ".claude"))
-REC = Path(os.environ.get("HARNESS_MEETING_DIR", HARNESS / "meeting-summaries"))
-STATE = HARNESS / "MEMORY" / "STATE"
+from harness_paths import GRAPHITI_GROUP_ID, LEARNING, MEETING_DIR, STATE
+
+REC = MEETING_DIR
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 ARCHIVE = STATE / "graphiti_flushed_archive.jsonl"
 LEDGER = STATE / "meeting_graphiti_ingest_ledger.json"
-LEARNING = HARNESS / "MEMORY" / "LEARNING"
 MIN_BYTES = 900
 
 
@@ -112,7 +109,7 @@ def main() -> int:
             "episode_body": body,
             "source": "text",
             "source_description": "meeting_summary_ingest continuous",
-            "group_id": os.environ.get("GRAPHITI_GROUP_ID", "main"),
+            "group_id": GRAPHITI_GROUP_ID,
             "status": "pending",
         }
         queued.append((key, name, row))

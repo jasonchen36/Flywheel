@@ -252,7 +252,7 @@ Autonomous harness self-improvement = closed loop on **machinery**, not weights:
 
 ## Phases A–D further improvement (2026-07-17)
 
-See `DIAGNOSTICS/phases_ABCD_2026-07-17.md` and `self_harness_status.py`.
+See `DIAGNOSTICS/phases_ABCD_2026-07-17.md` and `harness_healthcheck.py`.
 
 
 ## Phases E–I (2026-07-17)

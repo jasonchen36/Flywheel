@@ -37,6 +37,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -44,7 +45,7 @@ from self_improve import (  # noqa: E402
 )
 from measure_effectiveness import discover_lessons, entry_date  # noqa: E402
 
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
 
 LOW = 4
 MIN_SIDE_N = 5            # min sessions on each side of D to trust a rate
@@ -107,10 +108,14 @@ def main() -> int:
             if q == p:
                 continue
 
-            def rate(pool):
+            def rate(pool, side_effect_pattern=q):
                 if not pool:
                     return 0.0
-                hits = sum(1 for e in pool if e.rating <= LOW and q in e.patterns)
+                hits = sum(
+                    1
+                    for entry in pool
+                    if entry.rating <= LOW and side_effect_pattern in entry.patterns
+                )
                 return hits / len(pool)
 
             b, a = rate(before_pool), rate(after_pool)

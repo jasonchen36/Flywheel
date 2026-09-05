@@ -31,17 +31,18 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from harness_paths import HARNESS_HOME, LESSONS_DIR
 from typing import Optional
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
-RATINGS_FILE  = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/ratings.jsonl"
-FAILURES_DIR  = Path.home() / ".claude/MEMORY/LEARNING/FAILURES"
-MEMORY_DIR    = Path.home() / ".claude/projects/-Users-jason-chen/memory"
-DIAGNOSTICS   = Path.home() / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
-LESSONS_LOG   = Path.home() / ".claude/MEMORY/LEARNING/lessons_log.jsonl"
-EVAL_CANDIDATES_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/eval_candidates.jsonl"
-EFFECTIVENESS_LOG = Path.home() / ".claude/MEMORY/LEARNING/effectiveness_log.jsonl"
+RATINGS_FILE  = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/ratings.jsonl"
+FAILURES_DIR  = HARNESS_HOME / "MEMORY/LEARNING/FAILURES"
+MEMORY_DIR    = LESSONS_DIR
+DIAGNOSTICS   = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
+LESSONS_LOG   = HARNESS_HOME / "MEMORY/LEARNING/lessons_log.jsonl"
+EVAL_CANDIDATES_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/eval_candidates.jsonl"
+EFFECTIVENESS_LOG = HARNESS_HOME / "MEMORY/LEARNING/effectiveness_log.jsonl"
 
 # Phase M: cache of earliest historical lesson epochs (never reset on rewrite)
 _HIST_EPOCH_CACHE: Optional[dict[str, str]] = None
@@ -606,7 +607,7 @@ def load_all_ratings(path: Path) -> list[RatingEntry]:
 # ── Classification ────────────────────────────────────────────────────────────
 
 # Persistent reclass labels from judge_outcomes --reclass-other (session|ts → patterns)
-OTHER_RECLASS_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/other_reclass.jsonl"
+OTHER_RECLASS_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/other_reclass.jsonl"
 _RECLASS_CACHE: dict[str, list[str]] | None = None
 
 
@@ -681,7 +682,7 @@ def classify_entry(entry: RatingEntry) -> list[str]:
 def _apply_pai_settings_env() -> None:
     """settings.json PAI_* wins over stale process env (Grok long-lived sessions)."""
     try:
-        settings_path = Path.home() / ".claude" / "settings.json"
+        settings_path = HARNESS_HOME / "settings.json"
         if not settings_path.is_file():
             return
         data = json.loads(settings_path.read_text())
@@ -1103,7 +1104,7 @@ def write_lesson_file(
     first_seen = min(candidates) if candidates else today
     material = not (prev_rule and prev_rule == lesson.strip())
     last_updated = today if material else (prev_last or today)
-    content_version = hashlib.sha1(lesson.strip().encode()).hexdigest()[:10]
+    content_version = hashlib.sha256(lesson.strip().encode()).hexdigest()[:10]
     bullets = "\n".join(
         f"- [{e.rating}] {e.sentiment_summary}"
         for e in sorted(examples, key=lambda x: x.rating)[:5]
@@ -1307,7 +1308,7 @@ def main():
 
     # ── Pick source ───────────────────────────────────────────────────────────
     if args.source == "ratings":
-        print(f"[self_improve] Source: ratings.jsonl")
+        print("[self_improve] Source: ratings.jsonl")
         all_entries = load_all_ratings(RATINGS_FILE)
         low = [e for e in all_entries if e.rating <= args.threshold]
         active_patterns   = PATTERN_KEYWORDS
@@ -1410,7 +1411,7 @@ def main():
             lesson = active_templates.get(p)
             if not lesson:
                 try:
-                    sys.path.insert(0, str(Path.home() / ".claude/MEMORY/LEARNING"))
+                    sys.path.insert(0, str(HARNESS_HOME / "MEMORY/LEARNING"))
                     from ace_reflector import fallback_rule_from_examples
                     lesson = fallback_rule_from_examples(p, data["examples"])
                     print(f"    [reflector] {lesson[:80]}...")

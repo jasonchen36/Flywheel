@@ -38,13 +38,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from harness_paths import HARNESS_HOME
 
-ENFORCE_LOG   = Path.home() / ".claude/MEMORY/LEARNING/enforcement_log.jsonl"
-CONFIG_JSON   = Path.home() / ".claude/MEMORY/STATE/enforcement_config.json"
-REVIEW_FILE   = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+ENFORCE_LOG   = HARNESS_HOME / "MEMORY/LEARNING/enforcement_log.jsonl"
+CONFIG_JSON   = HARNESS_HOME / "MEMORY/STATE/enforcement_config.json"
+REVIEW_FILE   = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
 
 # Patterns whose mode is read directly from enforcement_config.json overrides in
 # EnforcementGate.hook.ts, with NO lesson file and NO escalate[] consumer. Must be

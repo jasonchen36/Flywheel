@@ -46,6 +46,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 from typing import Callable
 
 # Reuse the generator's loaders + classifier + paths — no path/attribution drift.
@@ -59,10 +60,10 @@ from self_improve import (  # noqa: E402
 )
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-SIGNALS_DIR          = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS"
+SIGNALS_DIR          = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 EVAL_RESULTS_FILE    = SIGNALS_DIR / "eval_results.jsonl"
 EVAL_CANDIDATES_FILE = SIGNALS_DIR / "eval_candidates.jsonl"
-STATE_DIR            = Path.home() / ".claude/MEMORY/STATE"
+STATE_DIR            = HARNESS_HOME / "MEMORY/STATE"
 REGISTRY_FILE        = STATE_DIR / "eval_registry.json"
 
 LOW = 4  # rating <= LOW is a failure session (mirrors measure_effectiveness.LOW)

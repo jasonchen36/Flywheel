@@ -45,6 +45,7 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import HARNESS_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -52,9 +53,9 @@ from self_improve import (  # noqa: E402
     RATINGS_FILE, DIAGNOSTICS,
 )
 
-SIGNALS_DIR = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS"
+SIGNALS_DIR = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 CANDIDATES_FILE = SIGNALS_DIR / "pattern_candidates.jsonl"
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
 SELF_IMPROVE_PY = Path(__file__).resolve().parent / "self_improve.py"
 
 MIN_OCCURRENCES = 3   # distinct session_ids under one label before it's a promotion candidate

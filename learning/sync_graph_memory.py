@@ -27,16 +27,13 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import BUNGRAPH_DB, DIAGNOSTICS, STATE
 
-HOME = Path.home()
-STATE = HOME / ".claude/MEMORY/STATE"
-LEARNING = HOME / ".claude/MEMORY/LEARNING"
 SCORES = STATE / "effectiveness_scores.json"
 ACE = STATE / "ace_playbook.json"
-BUNGRAPH_DB = HOME / ".bungraph.db"  # MCP path
 PENDING_GRAPHITI = STATE / "graphiti_pending_episodes.jsonl"
 GRAPH_PREFLIGHT = STATE / "graph_preflight.md"
-DIAG = LEARNING / "DIAGNOSTICS"
+DIAG = DIAGNOSTICS
 
 
 def now_iso() -> str:

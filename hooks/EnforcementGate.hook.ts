@@ -24,14 +24,24 @@
 
 import { readHookInput, parseTranscriptFromInput } from './lib/hook-io';
 import { readFileSync, existsSync, writeFileSync, appendFileSync } from 'fs';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 
-const PAI_DIR = process.env.PAI_DIR || join(homedir(), '.claude');
+const PAI_DIR = process.env.HARNESS_HOME || process.env.PAI_DIR || join(homedir(), '.claude');
 const SCORES_JSON = join(PAI_DIR, 'MEMORY', 'STATE', 'effectiveness_scores.json');
 const CONFIG_JSON = join(PAI_DIR, 'MEMORY', 'STATE', 'enforcement_config.json');
 const ENFORCE_LOG = join(PAI_DIR, 'MEMORY', 'LEARNING', 'enforcement_log.jsonl');
+
+function runPythonHelper(scriptName: string, input: string, timeout: number): string {
+  const script = join(PAI_DIR, 'tools', scriptName);
+  return execFileSync('pyenv', ['exec', 'python3', script], {
+    input,
+    timeout,
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'ignore'],
+  }).trim();
+}
 
 type Mode = 'off' | 'warn' | 'block';
 interface Detector {
@@ -184,10 +194,11 @@ const DETECTORS: Record<string, Detector> = {
         // resolves to Homebrew 3.14 (no `dotenv`/`rlm` deps installed there), which
         // silently falls into this script's fail-safe ImportError path and prints
         // APPROVE unconditionally — neutering this detector with no visible error.
-        const stdout = execSync('pyenv exec python3 ${HOME}/.claude/tools/adversarial_claim_detector.py', {
-          input: r,
-          timeout: 20000 // measured live call latency ~9.2s; 4s guaranteed a timeout every call
-        }).toString().trim();
+        const stdout = runPythonHelper(
+          'adversarial_claim_detector.py',
+          r,
+          20000, // measured live call latency ~9.2s; 4s guaranteed a timeout every call
+        );
 
         if (stdout.startsWith('BLOCK:')) {
           return stdout.replace('BLOCK:', '').trim();
@@ -442,8 +453,8 @@ async function main() {
         const payload = JSON.stringify({ response: resp, transcript_path: (input as any).transcript_path || '' });
         // Same pyenv note as adversarial_claim_detector.py above — bare python3 lacks
         // `dotenv`/`rlm` and silently fail-safes to APPROVE.
-        const out = execSync('pyenv exec python3 ${HOME}/.claude/tools/claim_evidence_verifier.py',
-          { input: payload, timeout: 30000 }).toString().trim().replace(/^["']+|["']+$/g, '');
+        const out = runPythonHelper('claim_evidence_verifier.py', payload, 30000)
+          .replace(/^["']+|["']+$/g, '');
         if (out.startsWith('BLOCK:')) {
           fires.push({ pattern: 'claim_evidence', mode, reason: out.slice(6).trim() });
         }

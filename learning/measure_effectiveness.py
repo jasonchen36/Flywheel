@@ -37,6 +37,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from harness_paths import BUNGRAPH_DB, HARNESS_HOME
 
 # Reuse the EXACT classifier the generator uses — no attribution drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,10 +51,10 @@ from self_improve import (  # noqa: E402
 from evals import load_objective_fails, covered_patterns  # noqa: E402
 from judge_outcomes import load_judge_fails, judged_patterns  # noqa: E402
 
-STATE_DIR = Path.home() / ".claude/MEMORY/STATE"
+STATE_DIR = HARNESS_HOME / "MEMORY/STATE"
 SCORES_JSON = STATE_DIR / "effectiveness_scores.json"
-EFFECT_LOG  = Path.home() / ".claude/MEMORY/LEARNING/effectiveness_log.jsonl"
-REVIEW_FILE = Path.home() / ".claude/MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
+EFFECT_LOG  = HARNESS_HOME / "MEMORY/LEARNING/effectiveness_log.jsonl"
+REVIEW_FILE = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS/pending_human_review.jsonl"
 
 LOW = 4              # rating <= LOW counts as a failure session
 MIN_AFTER = 5        # need this many post-lesson sessions before judging
@@ -102,8 +103,8 @@ def push_to_bungraph(pattern: str, verdict: str, delta: float, today: str):
         f"as of {today} based on objective/subjective session evaluations."
     )
     dbs = [
-        Path.home() / ".bungraph.db",
-        Path.home() / ".claude/MEMORY/LEARNING/bungraph.db",
+        BUNGRAPH_DB,
+        HARNESS_HOME / "MEMORY/LEARNING/bungraph.db",
     ]
     for db in dbs:
         env = {**os.environ, "BUNGRAPH_DB_PATH": str(db)}
@@ -233,10 +234,14 @@ def main() -> int:
         after = [e for e in entries if entry_date(e.timestamp) >= ldate]
         days_open = days_between(ldate, today)
 
-        def rate(pool):
+        def rate(pool, current_pattern=pattern):
             if not pool:
                 return 0.0, 0
-            hits = sum(1 for e in pool if e.rating <= LOW and pattern in e.patterns)
+            hits = sum(
+                1
+                for entry in pool
+                if entry.rating <= LOW and current_pattern in entry.patterns
+            )
             return hits / len(pool), hits
 
         before_rate, _ = rate(before)
@@ -247,10 +252,14 @@ def main() -> int:
         # Objective verdict from binary evals — reproducible, when the pattern has coverage.
         is_covered = pattern in covered
         if is_covered:
-            def obj_rate(pool):
+            def obj_rate(pool, current_pattern=pattern):
                 if not pool:
                     return 0.0
-                hits = sum(1 for e in pool if obj_fails.get(e.timestamp, {}).get(pattern))
+                hits = sum(
+                    1
+                    for entry in pool
+                    if obj_fails.get(entry.timestamp, {}).get(current_pattern)
+                )
                 return hits / len(pool)
             obj_before = obj_rate(before)
             obj_after = obj_rate(after)
@@ -265,9 +274,17 @@ def main() -> int:
         # mostly unrated, so they are NOT in `entries`; never join on entry timestamps).
         is_judged = pattern in judged
         if is_judged:
-            def jdg_rate(before_side: bool):
-                rows = [pats[pattern] for ts, pats in judge_fails.items()
-                        if pattern in pats and ((entry_date(ts) < ldate) == before_side)]
+            def jdg_rate(
+                before_side: bool,
+                current_pattern=pattern,
+                lesson_date=ldate,
+            ):
+                rows = [
+                    patterns[current_pattern]
+                    for timestamp, patterns in judge_fails.items()
+                    if current_pattern in patterns
+                    and ((entry_date(timestamp) < lesson_date) == before_side)
+                ]
                 if not rows:
                     return 0.0, 0
                 return sum(1 for f in rows if f) / len(rows), len(rows)
@@ -461,7 +478,7 @@ def main() -> int:
                          f"{n} sessions since lesson)")
     review_section = first_time_regressed + under_review
     if review_section:
-        lines += ["", f"## Gated for human review (NOT in escalate[])",
+        lines += ["", "## Gated for human review (NOT in escalate[])",
                   f"Run `python3 review_queue.py --list` to inspect. Auto-escalates after {REVIEW_EXPIRE_DAYS} days.", ""]
         for r in review_section:
             tag = "new" if r in first_time_regressed else "pending"

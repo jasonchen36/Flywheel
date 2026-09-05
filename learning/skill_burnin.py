@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from skill_autofix import (
     load_ledger, save_ledger, skill_sessions, fail_rate, MIN_AFTER,
-    skill_file_with_surface, content_at, snapshot, LEDGER_FILE, DIAG_DIR,
+    LEDGER_FILE, DIAG_DIR,
 )
 from measure_effectiveness import verdict_for
 from self_improve import load_all_ratings, RATINGS_FILE

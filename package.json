@@ -1,0 +1,12 @@
+{
+  "name": "flywheel-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:hooks": "bun build hooks/*.ts pi/*.ts --outdir /tmp/flywheel-ts-build --target=bun --external='../PAI/*' --external='../../PAI/*' --external='@earendil-works/pi-coding-agent'"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}

@@ -25,6 +25,8 @@ Usage:
 
 from __future__ import annotations
 
+from harness_paths import LESSONS_DIR
+
 import argparse
 import re
 from dataclasses import asdict, dataclass, field
@@ -895,9 +897,8 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    from pathlib import Path
 
-    lessons_dir = Path.home() / ".claude/MEMORY/lessons"
+    lessons_dir = LESSONS_DIR
     if not lessons_dir.exists():
         print("[ace_reflector] no lessons dir")
         return 1

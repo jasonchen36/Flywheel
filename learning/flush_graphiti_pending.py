@@ -21,19 +21,38 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone
-from pathlib import Path
+from harness_paths import GRAPHITI_MCP_URL, HARNESS_HOME
 
-HOME = Path.home()
-STATE = HOME / ".claude/MEMORY/STATE"
+STATE = HARNESS_HOME / "MEMORY/STATE"
 PENDING = STATE / "graphiti_pending_episodes.jsonl"
 ARCHIVE = STATE / "graphiti_flushed_archive.jsonl"
-DIAG = HOME / ".claude/MEMORY/LEARNING/DIAGNOSTICS"
-DEFAULT_URL = os.environ.get("GRAPHITI_MCP_URL", "http://127.0.0.1:8000/mcp")
+DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
+DEFAULT_URL = GRAPHITI_MCP_URL
+
+
+def normalize_mcp_url(url: str) -> str:
+    """Validate an HTTP(S) Graphiti endpoint and ensure it targets ``/mcp``."""
+    value = url.strip()
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("GRAPHITI_MCP_URL must use http or https")
+    if not parsed.hostname:
+        raise ValueError("GRAPHITI_MCP_URL must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError("GRAPHITI_MCP_URL must not contain embedded credentials")
+    if parsed.fragment:
+        raise ValueError("GRAPHITI_MCP_URL must not contain a URL fragment")
+
+    path = parsed.path.rstrip("/")
+    if not path:
+        path = "/mcp"
+    elif path != "/mcp":
+        raise ValueError("GRAPHITI_MCP_URL path must be /mcp or omitted")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
 
 
 def now_iso() -> str:
@@ -46,11 +65,9 @@ def today() -> str:
 
 class GraphitiMCPHttp:
     def __init__(self, url: str = DEFAULT_URL, timeout: float = 60.0):
-        self.url = url.rstrip("/") if url.endswith("/") and not url.endswith("/mcp/") else url
-        if not self.url.endswith("/mcp") and not self.url.endswith("/mcp/"):
-            # allow base host:port
-            if self.url.count("/") <= 2:
-                self.url = self.url.rstrip("/") + "/mcp"
+        self.url = normalize_mcp_url(url)
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         self.timeout = timeout
         self.session_id: str | None = None
         self._id = 0
@@ -71,7 +88,8 @@ class GraphitiMCPHttp:
             self.url, data=data, headers=headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            # URL is constrained to an absolute HTTP(S) /mcp endpoint in __init__.
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # nosec B310
                 if not self.session_id:
                     self.session_id = (
                         resp.headers.get("mcp-session-id")
