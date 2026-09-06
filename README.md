@@ -126,7 +126,7 @@ python3 held_out_suite.py --gate
 | Grok Build | `[compat.claude] hooks` reading same Claude paths |
 | pi | `pi/*.ts` extensions + SessionEnd via Claude-compatible bridge |
 
-Tag ratings with `agent: claude|grok|pi` (hooks set this when possible). Claude and pi append ratings, pending judge work, and enforcement events through the same ownership-directory lock protocol used by Python rewriters, preventing cross-runtime lost updates. Dead owners recover automatically; long-running live owners are never evicted solely because of lock age.
+Tag ratings with `agent: claude|grok|pi` (hooks set this when possible). Claude and pi append ratings, pending judge work, and enforcement events through the same ownership-directory lock protocol used by Python rewriters, preventing cross-runtime lost updates. Dead-owner recovery is serialized across contenders, disappearing paths are never misclassified as stale, and long-running live owners are never evicted solely because of lock age.
 
 ---
 
@@ -141,7 +141,9 @@ python3 "$HARNESS_HOME/MEMORY/LEARNING/review_queue.py" \
   --approve PATTERN --source SOURCE --retry-failed
 ```
 
-`harness_healthcheck.py --json` reports malformed review rows, unknown statuses, processing claims, failed actions, and invalid enforcement configuration.
+`harness_healthcheck.py --json` reports malformed review rows, unknown statuses, processing claims, failed actions, and invalid enforcement configuration. Outcome judging treats empty or malformed provider output as unavailable and leaves the turn queued for retry; malformed queue rows are moved to `SIGNALS/invalid_judge.jsonl` so they remain inspectable without blocking later work. Valid judge results, queue draining, and result deduplication share one transaction boundary.
+
+`harness_changelog.py` fingerprints watched files with SHA-256, so same-size edits are detected even when timestamps are preserved. It excludes external symlinks, transient atomic-write files, and portable lock-owner directories while accepting and upgrading older size-and-mtime snapshots.
 
 ---
 
@@ -154,7 +156,7 @@ make install-dev
 make check
 ```
 
-The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 49% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Nine critical modules independently require 100% statement and branch coverage: durable state I/O, transactional review storage, validated configuration, surface permissions, ratings hygiene, config-only enforcement promotion, shared summary ingestion, lesson deduplication, and pattern promotion. Direct lifecycle tests additionally cover held-out fixture validation, self-harness result reuse, session auto-seeding, graph synchronization, lesson retirement, and skill burn-in without live network or model dependencies. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
+The gate runs Ruff, mypy with Python 3.10 compatibility, Python compilation, the complete branch-aware pytest suite with a 60% repository non-regression floor, a Bun build of all hooks and pi extensions, Bandit, Python and JavaScript dependency audits, and ShellCheck. Thirteen critical modules independently require 100% statement and branch coverage: durable state I/O, transactional review storage, validated configuration, surface permissions, ratings hygiene, config-only enforcement promotion, shared summary ingestion, lesson deduplication, pattern promotion, strict outcome judging, effectiveness measurement, held-out regression decisions, and hashed changelog integrity. Direct lifecycle tests additionally cover held-out fixture validation, self-harness result reuse, session auto-seeding, graph synchronization, lesson retirement, skill burn-in, and the judge-to-effectiveness-to-human-review flow without live network or model dependencies. Individual targets include `make test`, `make coverage-foundations`, `make lint`, `make hooks`, `make security`, and `make shellcheck`.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change and test expectations and [`SECURITY.md`](SECURITY.md) for responsible reporting guidance.
 

@@ -151,6 +151,10 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _recovery_path(lock_path: Path) -> Path:
+    return lock_path.with_name(f"{lock_path.name}.recovery.d")
+
+
 def _lock_is_stale(lock_path: Path, stale_after: float) -> bool:
     owner = _read_lock_owner(lock_path)
     if owner is not None:
@@ -158,15 +162,37 @@ def _lock_is_stale(lock_path: Path, stale_after: float) -> bool:
     try:
         age = time.time() - lock_path.stat().st_mtime
     except OSError:
-        return True
+        return False
     return age > stale_after
 
 
 def _remove_lock(lock_path: Path) -> None:
-    if lock_path.is_dir():
-        shutil.rmtree(lock_path, ignore_errors=True)
-    else:
-        lock_path.unlink(missing_ok=True)
+    try:
+        if lock_path.is_dir():
+            shutil.rmtree(lock_path, ignore_errors=True)
+        else:
+            lock_path.unlink(missing_ok=True)
+    except OSError:
+        # Another contender may have replaced or removed the path after inspection.
+        return
+
+
+def _try_recover_stale_lock(lock_path: Path, stale_after: float) -> bool:
+    """Remove a stale lock while excluding concurrent recovery attempts."""
+    recovery_path = _recovery_path(lock_path)
+    try:
+        recovery_path.mkdir()
+    except FileExistsError:
+        if _lock_is_stale(recovery_path, stale_after):
+            _remove_lock(recovery_path)
+        return False
+    try:
+        if not _lock_is_stale(lock_path, stale_after):
+            return False
+        _remove_lock(lock_path)
+        return True
+    finally:
+        _remove_lock(recovery_path)
 
 
 @contextmanager
@@ -188,8 +214,7 @@ def exclusive_lock(
         try:
             lock_path.mkdir()
         except FileExistsError:
-            if _lock_is_stale(lock_path, stale_after):
-                _remove_lock(lock_path)
+            if _try_recover_stale_lock(lock_path, stale_after):
                 continue
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"timed out waiting for state lock: {path}") from None

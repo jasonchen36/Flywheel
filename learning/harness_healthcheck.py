@@ -213,6 +213,40 @@ def main(argv: list[str] | None = None) -> int:
             f"newest rating is {rating_age_days}d old — capture may be degraded"
         )
 
+    # Outcome judge queues and quarantine
+    judge_pending = load_jsonl_objects(SIGNALS / "pending_judge.jsonl")
+    judge_results = load_jsonl_objects(SIGNALS / "judge_results.jsonl")
+    judge_invalid = load_jsonl_objects(SIGNALS / "invalid_judge.jsonl")
+    report["checks"]["outcome_judge"] = {
+        "pending": len(judge_pending.records),
+        "results": len(judge_results.records),
+        "quarantined": len(judge_invalid.records),
+        "pending_invalid_lines": list(judge_pending.invalid_lines),
+        "result_invalid_lines": list(judge_results.invalid_lines),
+        "quarantine_invalid_lines": list(judge_invalid.invalid_lines),
+    }
+    malformed_judge_state = (
+        judge_pending.invalid_lines
+        or judge_results.invalid_lines
+        or judge_invalid.invalid_lines
+    )
+    if malformed_judge_state:
+        report["errors"].append(
+            "outcome judge state has malformed JSON object rows: "
+            f"pending={list(judge_pending.invalid_lines)} "
+            f"results={list(judge_results.invalid_lines)} "
+            f"quarantine={list(judge_invalid.invalid_lines)}"
+        )
+        report["ok"] = False
+    if judge_invalid.records:
+        report["warnings"].append(
+            f"{len(judge_invalid.records)} quarantined outcome-judge turn(s) require inspection"
+        )
+    if len(judge_pending.records) > 50:
+        report["warnings"].append(
+            f"{len(judge_pending.records)} outcome-judge turns still pending — provider may be unavailable"
+        )
+
     # Graph
     pending = STATE / "graphiti_pending_episodes.jsonl"
     archive = STATE / "graphiti_flushed_archive.jsonl"
@@ -432,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Lessons: {report['checks']['lessons']}")
         print(f"Ratings: {report['checks']['ratings']}")
         print(f"Signal freshness: {report['checks']['signal_freshness']}")
+        print(f"Outcome judge: {report['checks']['outcome_judge']}")
         print(f"Graph: {report['checks']['graph']}")
         print(f"Enforcement: {report['checks']['enforcement']}")
         print(f"Review queue: {report['checks']['review_queue']}")

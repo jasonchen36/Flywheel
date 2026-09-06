@@ -45,18 +45,44 @@ function pidAlive(pid: number): boolean {
   }
 }
 
+function recoveryPathFor(lockPath: string): string {
+  return `${lockPath}.recovery.d`;
+}
+
 function isStale(lockPath: string, staleMs: number): boolean {
   const owner = readOwner(lockPath);
   if (owner) return !pidAlive(owner.pid);
   try {
     return Date.now() - statSync(lockPath).mtimeMs > staleMs;
   } catch {
-    return true;
+    return false;
   }
 }
 
 function removeLock(lockPath: string): void {
-  rmSync(lockPath, { recursive: true, force: true });
+  try {
+    rmSync(lockPath, { recursive: true, force: true });
+  } catch {
+    // Another contender may have replaced or removed the path after inspection.
+  }
+}
+
+function tryRecoverStaleLock(lockPath: string, staleMs: number): boolean {
+  const recoveryPath = recoveryPathFor(lockPath);
+  try {
+    mkdirSync(recoveryPath);
+  } catch (error: any) {
+    if (error?.code !== 'EEXIST') throw error;
+    if (isStale(recoveryPath, staleMs)) removeLock(recoveryPath);
+    return false;
+  }
+  try {
+    if (!isStale(lockPath, staleMs)) return false;
+    removeLock(lockPath);
+    return true;
+  } finally {
+    removeLock(recoveryPath);
+  }
 }
 
 function sleep(milliseconds: number): void {
@@ -80,10 +106,7 @@ export function withStateLock<T>(path: string, operation: () => T, options: Lock
       mkdirSync(lockPath);
     } catch (error: any) {
       if (error?.code !== 'EEXIST') throw error;
-      if (isStale(lockPath, staleMs)) {
-        removeLock(lockPath);
-        continue;
-      }
+      if (tryRecoverStaleLock(lockPath, staleMs)) continue;
       if (Date.now() >= deadline) throw new Error(`timed out waiting for state lock: ${path}`);
       sleep(pollMs);
       continue;

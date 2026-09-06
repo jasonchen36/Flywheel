@@ -37,7 +37,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from review_store import enqueue_pending, load_reviews
+from review_store import enqueue_pending
+from state_io import atomic_write_text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
@@ -54,15 +55,84 @@ MIN_ABS_DELTA = 0.05      # ...and the absolute jump must be at least this
 NEW_PATTERN_FLOOR = 0.10  # pattern never seen before D, now at least this rate after
 
 
-def load_review_queue() -> list[dict]:
-    return load_reviews(REVIEW_FILE)
+def valid_date(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value
 
 
-def main() -> int:
+def failure_rate(pool: list, pattern: str) -> float:
+    if not pool:
+        return 0.0
+    hits = sum(
+        1
+        for entry in pool
+        if isinstance(getattr(entry, "rating", None), int)
+        and entry.rating <= LOW
+        and pattern in getattr(entry, "patterns", [])
+    )
+    return hits / len(pool)
+
+
+def find_regressions(entries: list, lessons: dict, min_side_n: int) -> list[dict]:
+    all_patterns = sorted({
+        pattern
+        for entry in entries
+        for pattern in getattr(entry, "patterns", [])
+        if isinstance(pattern, str) and pattern != "other"
+    })
+    flagged: list[dict] = []
+    for lesson_pattern, meta in sorted(lessons.items()):
+        raw_date = meta.get("baseline_date") if isinstance(meta, dict) else meta
+        lesson_date = valid_date(raw_date)
+        if lesson_date is None:
+            continue
+        before_pool = [
+            entry for entry in entries if entry_date(getattr(entry, "timestamp", "")) < lesson_date
+        ]
+        after_pool = [
+            entry for entry in entries if entry_date(getattr(entry, "timestamp", "")) >= lesson_date
+        ]
+        if len(before_pool) < min_side_n or len(after_pool) < min_side_n:
+            continue
+        for side_effect_pattern in all_patterns:
+            if side_effect_pattern == lesson_pattern:
+                continue
+            before_rate = failure_rate(before_pool, side_effect_pattern)
+            after_rate = failure_rate(after_pool, side_effect_pattern)
+            is_regression = (
+                before_rate > 0
+                and after_rate >= before_rate * REL_REGRESSION
+                and (after_rate - before_rate) >= MIN_ABS_DELTA
+            ) or (
+                before_rate == 0 and after_rate >= NEW_PATTERN_FLOOR
+            )
+            if is_regression:
+                flagged.append({
+                    "offending_lesson": lesson_pattern,
+                    "side_effect_pattern": side_effect_pattern,
+                    "lesson_date": lesson_date,
+                    "before_rate": round(before_rate, 4),
+                    "after_rate": round(after_rate, 4),
+                    "delta": round(after_rate - before_rate, 4),
+                    "before_n": len(before_pool),
+                    "after_n": len(after_pool),
+                })
+    return flagged
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="queue flagged pairs for human review")
     ap.add_argument("--min-side-n", type=int, default=MIN_SIDE_N)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.min_side_n <= 0:
+        print("[held_out_regression] min-side-n must be positive")
+        return 2
 
     entries = load_all_ratings(RATINGS_FILE)
     for e in entries:
@@ -73,46 +143,8 @@ def main() -> int:
         print("[held_out_regression] No lessons found — run self_improve.py first.")
         return 0
 
-    all_patterns = sorted({p for e in entries for p in e.patterns if p != "other"})
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    flagged: list[dict] = []
-    for p, meta in sorted(lessons.items()):
-        # Compat: discover_lessons used to return str dates; now returns meta dicts.
-        ldate = meta.get("baseline_date") if isinstance(meta, dict) else meta
-        if not ldate:
-            continue
-        before_pool = [e for e in entries if entry_date(e.timestamp) < ldate]
-        after_pool = [e for e in entries if entry_date(e.timestamp) >= ldate]
-        if len(before_pool) < args.min_side_n or len(after_pool) < args.min_side_n:
-            continue
-
-        for q in all_patterns:
-            if q == p:
-                continue
-
-            def rate(pool, side_effect_pattern=q):
-                if not pool:
-                    return 0.0
-                hits = sum(
-                    1
-                    for entry in pool
-                    if entry.rating <= LOW and side_effect_pattern in entry.patterns
-                )
-                return hits / len(pool)
-
-            b, a = rate(before_pool), rate(after_pool)
-            is_regression = (
-                (b > 0 and a >= b * REL_REGRESSION and (a - b) >= MIN_ABS_DELTA)
-                or (b == 0 and a >= NEW_PATTERN_FLOOR)
-            )
-            if is_regression:
-                flagged.append({
-                    "offending_lesson": p, "side_effect_pattern": q,
-                    "lesson_date": ldate, "before_rate": round(b, 4),
-                    "after_rate": round(a, 4), "delta": round(a - b, 4),
-                    "before_n": len(before_pool), "after_n": len(after_pool),
-                })
+    flagged = find_regressions(entries, lessons, args.min_side_n)
 
     # ── report ────────────────────────────────────────────────────────────────
     lines = [f"# Held-Out Regression Check — {today}", "",
@@ -132,8 +164,7 @@ def main() -> int:
     report = "\n".join(lines) + "\n"
     print(report)
 
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-    (DIAGNOSTICS / f"held_out_regression_{today}.md").write_text(report)
+    atomic_write_text(DIAGNOSTICS / f"held_out_regression_{today}.md", report)
 
     if not args.apply or not flagged:
         if not args.apply and flagged:
@@ -141,9 +172,6 @@ def main() -> int:
         return 0
 
     # Queue for human review — one entry per OFFENDING lesson (dedup: worst side-effect wins).
-    records = load_review_queue()
-    already = {r["pattern"] for r in records
-              if r.get("status") == "pending" and r.get("source") == "held_out_regression"}
     worst_by_lesson: dict[str, dict] = {}
     for f in flagged:
         cur = worst_by_lesson.get(f["offending_lesson"])
@@ -152,8 +180,6 @@ def main() -> int:
 
     pending_rows: list[dict] = []
     for p, f in worst_by_lesson.items():
-        if p in already:
-            continue
         pending_rows.append({
             "pattern": p, "detected_at": today, "delta": f["delta"], "after_n": f["after_n"],
             "obj_verdict": "n/a", "judge_verdict": "n/a", "status": "pending",
@@ -172,5 +198,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
