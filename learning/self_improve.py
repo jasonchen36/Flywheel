@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -34,7 +35,14 @@ from pathlib import Path
 from harness_paths import HARNESS_HOME, LESSONS_DIR
 from typing import Any, Optional
 
-from state_io import append_jsonl, atomic_write_text, load_jsonl_objects
+from state_io import (
+    append_jsonl,
+    append_jsonl_unlocked,
+    atomic_write_text,
+    exclusive_lock,
+    load_jsonl_objects,
+    rewrite_jsonl_unlocked,
+)
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +56,16 @@ EFFECTIVENESS_LOG = HARNESS_HOME / "MEMORY/LEARNING/effectiveness_log.jsonl"
 
 # Phase M: cache of earliest historical lesson epochs (never reset on rewrite)
 _HIST_EPOCH_CACHE: Optional[dict[str, str]] = None
+
+
+def _iso_date(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    candidate = value[:10]
+    try:
+        return datetime.strptime(candidate, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
 
 
 def historical_epoch(pattern: str) -> Optional[str]:
@@ -72,9 +90,12 @@ def historical_epoch(pattern: str) -> Optional[str]:
                             r = json.loads(line)
                         except json.JSONDecodeError:
                             continue
+                        if not isinstance(r, dict):
+                            continue
                         p = r.get("pattern")
-                        ld = (r.get("lesson_date") or r.get("baseline_date") or "")[:10]
-                        if p and re.match(r"\d{4}-\d{2}-\d{2}", ld):
+                        date_value = r.get("lesson_date") or r.get("baseline_date") or ""
+                        ld = _iso_date(date_value)
+                        if isinstance(p, str) and ld is not None:
                             prev = _HIST_EPOCH_CACHE.get(p)
                             if prev is None or ld < prev:
                                 _HIST_EPOCH_CACHE[p] = ld
@@ -537,7 +558,10 @@ def load_failures(
             if not ctx.exists():
                 continue
 
-            content = ctx.read_text()
+            try:
+                content = ctx.read_text(errors="replace")
+            except OSError:
+                continue
             name = failure_dir.name
 
             # Domain filter
@@ -553,6 +577,8 @@ def load_failures(
             # Extract rating from CONTEXT.md
             m = re.search(r"rating:\s*(\d+)", content, re.IGNORECASE)
             rating = int(m.group(1)) if m else 3
+            if not 1 <= rating <= 10:
+                rating = 3
 
             # Extract summary (description field or summary field)
             m2 = re.search(r"Summary:\s*(.+)", content, re.IGNORECASE)
@@ -593,12 +619,20 @@ def load_all_ratings(path: Path) -> list[RatingEntry]:
     entries: list[RatingEntry] = []
     for record in load_jsonl_objects(path).records:
         try:
-            rating = int(record["rating"])
+            raw_rating = record["rating"]
+            if isinstance(raw_rating, bool):
+                continue
+            rating = int(raw_rating)
+            if float(raw_rating) != rating:
+                continue
             confidence = float(record.get("confidence", 0.0))
         except (KeyError, TypeError, ValueError):
             continue
         if not 1 <= rating <= 10:
             continue
+        if not math.isfinite(confidence):
+            confidence = 0.0
+        confidence = max(0.0, min(confidence, 1.0))
         eval_results = record.get("eval_results")
         entries.append(
             RatingEntry(
@@ -638,24 +672,34 @@ def _load_other_reclass() -> dict[str, list[str]]:
     if _RECLASS_CACHE is not None:
         return _RECLASS_CACHE
     out: dict[str, list[str]] = {}
-    if OTHER_RECLASS_FILE.exists():
-        for line in OTHER_RECLASS_FILE.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            pats = d.get("patterns") or []
-            if not pats:
-                continue
-            sid = d.get("session_id") or ""
-            ts = d.get("timestamp") or ""
-            if sid and ts:
-                out[f"{sid}|{ts}"] = list(pats)
+    known_patterns = set(PATTERN_KEYWORDS) | set(PR_PATTERN_KEYWORDS) | set(DAG_PATTERN_KEYWORDS)
+    for record in load_jsonl_objects(OTHER_RECLASS_FILE).records:
+        patterns = record.get("patterns")
+        if not isinstance(patterns, list):
+            continue
+        normalized = [
+            pattern
+            for pattern in patterns
+            if isinstance(pattern, str) and pattern in known_patterns
+        ]
+        session_id = record.get("session_id")
+        timestamp = record.get("timestamp")
+        if normalized and isinstance(session_id, str) and session_id and isinstance(timestamp, str) and timestamp:
+            out[f"{session_id}|{timestamp}"] = normalized
     _RECLASS_CACHE = out
     return out
+
+
+def rating_entry_key(entry: RatingEntry) -> str:
+    session_id = getattr(entry, "session_id", "")
+    timestamp = getattr(entry, "timestamp", "")
+    session_id = session_id if isinstance(session_id, str) else ""
+    timestamp = timestamp if isinstance(timestamp, str) else ""
+    if session_id and timestamp:
+        return f"{session_id}|{timestamp}"
+    if timestamp:
+        return f"timestamp|{timestamp}"
+    return session_id
 
 
 def classify_entry(entry: RatingEntry) -> list[str]:
@@ -667,8 +711,8 @@ def classify_entry(entry: RatingEntry) -> list[str]:
     """
     # 1) Prefer durable judge reclass labels (exact turn key only)
     reclass = _load_other_reclass()
-    key = f"{entry.session_id}|{entry.timestamp}"
-    if key in reclass:
+    key = rating_entry_key(entry)
+    if key and key in reclass:
         return reclass[key]
 
     # 2) Keyword match on full available text
@@ -715,7 +759,18 @@ def _apply_pai_settings_env() -> None:
 
 
 LAST_LLM_PROVIDER: Optional[str] = None
-_OPENCODE_DISABLED = False
+LAST_LLM_ERROR: Optional[str] = None
+
+_PROVIDER_ALIASES = {
+    "gemini": "gemini",
+    "google": "gemini",
+    "vertex": "gemini",
+    "flash": "gemini",
+    "opencode": "opencode",
+    "haiku": "haiku",
+    "anthropic": "haiku",
+    "claude": "haiku",
+}
 
 def call_llm(
     prompt: str,
@@ -724,17 +779,29 @@ def call_llm(
     system: str = "",
 ) -> Optional[str]:
     """Background LLM for self-improve / judge / evolve / Inference fast tier."""
-    global LAST_LLM_PROVIDER
+    global LAST_LLM_ERROR, LAST_LLM_PROVIDER
     import signal
 
     _apply_pai_settings_env()
+    LAST_LLM_PROVIDER = None
+    LAST_LLM_ERROR = None
 
     if os.environ.get("PAI_SELF_IMPROVE_LLM_DISABLED") == "1":
+        LAST_LLM_ERROR = "disabled by PAI_SELF_IMPROVE_LLM_DISABLED"
         return None
 
-    provider = (os.environ.get("PAI_BACKGROUND_LLM_PROVIDER") or "gemini").strip().lower()
+    try:
+        max_tokens = max(64, min(int(max_tokens), 16_384))
+    except (TypeError, ValueError):
+        max_tokens = 512
 
-    if provider in ("haiku", "anthropic", "claude") and os.environ.get("PAI_HAIKU_BACKGROUND_DISABLED") == "1":
+    configured = (os.environ.get("PAI_BACKGROUND_LLM_PROVIDER") or "gemini").strip().lower()
+    provider = _PROVIDER_ALIASES.get(configured)
+    if provider is None:
+        LAST_LLM_ERROR = f"unknown background LLM provider: {configured or '(empty)'}"
+        return None
+
+    if provider == "haiku" and os.environ.get("PAI_HAIKU_BACKGROUND_DISABLED") == "1":
         provider = "gemini"
     # Never use Anthropic for background self-improve when headless Claude is off
     # (Grok primary / stop Sonnet burn). Force Vertex Gemini.
@@ -745,7 +812,7 @@ def call_llm(
     if headless_claude_off:
         # Only override to gemini when provider is an Anthropic model.
         # Don't clobber opencode (separate non-Anthropic provider).
-        if provider in ("haiku", "anthropic", "claude"):
+        if provider == "haiku":
             provider = "gemini"
 
     def _on_timeout(signum, frame):
@@ -759,24 +826,28 @@ def call_llm(
         except (ValueError, AttributeError):
             old_handler = None
 
-        if provider in ("gemini", "google", "vertex", "flash"):
+        if provider == "gemini":
             res = _call_llm_gemini(prompt, model=model, max_tokens=max_tokens, system=system)
             if res:
                 LAST_LLM_PROVIDER = "gemini"
+            else:
+                LAST_LLM_ERROR = "gemini returned no content"
             return res
         if provider == "opencode":
             res = _call_llm_opencode(prompt, model=model, max_tokens=max_tokens, system=system)
             if res:
                 LAST_LLM_PROVIDER = "opencode"
+            else:
+                LAST_LLM_ERROR = "opencode returned no content"
             return res
-        if headless_claude_off:
-            return None
         res = _call_llm_haiku(prompt, model=model, max_tokens=max_tokens, system=system)
         if res:
             LAST_LLM_PROVIDER = "haiku"
+        else:
+            LAST_LLM_ERROR = "haiku returned no content"
         return res
-    except Exception:
-        pass
+    except Exception as exc:
+        LAST_LLM_ERROR = f"{type(exc).__name__}: {exc}"[:500]
     finally:
         try:
             signal.alarm(0)
@@ -794,9 +865,6 @@ def _call_llm_gemini(
     system: str = "",
 ) -> Optional[str]:
     """Cheap Vertex Gemini path (default for background self-improve / rating capture)."""
-    from google import genai
-    from google.genai import types
-
     m = model or os.environ.get("PAI_BACKGROUND_LLM_MODEL") or "gemini-2.5-flash"
     if "gemini" not in m.lower():
         m = "gemini-2.5-flash"
@@ -804,8 +872,11 @@ def _call_llm_gemini(
         os.environ.get("PAI_BACKGROUND_LLM_PROJECT")
         or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
         or os.environ.get("VERTEX_AI_PROJECT")
-        or "example-dev"
     )
+    if not project:
+        return None
+    from google import genai
+    from google.genai import types
     # Prefer PAI_BACKGROUND_LLM_LOCATION. Default global: gemini-3.1-flash-lite is
     # available on Vertex global for this project (404 on us-central1). Do not
     # blindly use CLOUD_ML_REGION from Claude Code Anthropic routing.
@@ -876,11 +947,14 @@ def _call_llm_haiku(
     system: str = "",
 ) -> Optional[str]:
     """Legacy Anthropic Haiku path (expensive; only if PAI_BACKGROUND_LLM_PROVIDER=haiku)."""
+    project = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
+    if not project:
+        return None
     from anthropic import AnthropicVertex  # type: ignore[import-not-found]
 
     m = model or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-haiku-4-5@20251001")
     kwargs: dict = {
-        "project_id": os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "example-dev"),
+        "project_id": project,
         "region": os.environ.get("CLOUD_ML_REGION")
                   or os.environ.get("ANTHROPIC_VERTEX_REGION", "us-east5"),
         "timeout": 20.0,
@@ -913,8 +987,8 @@ def generate_lesson_llm(pattern: str, examples: list[RatingEntry]) -> Optional[s
     return call_llm(prompt)
 
 
-def _parse_json_object(raw: str) -> Optional[dict]:
-    """Defensively extract a JSON object from an LLM reply (tolerates code fences/prose)."""
+def _parse_json_object(raw: str) -> Optional[dict[str, Any]]:
+    """Defensively extract a JSON object from an LLM reply."""
     s = raw.strip()
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
@@ -926,9 +1000,49 @@ def _parse_json_object(raw: str) -> Optional[dict]:
         obj = json.loads(s[i:j + 1])
     except json.JSONDecodeError:
         return None
-    if not isinstance(obj, dict) or "instruction" not in obj:
+    return obj if isinstance(obj, dict) else None
+
+
+def _normalized_text(value: Any, *, maximum: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:maximum]
+
+
+def normalize_eval_candidate(pattern: str, value: Any) -> Optional[dict[str, str]]:
+    if not isinstance(value, dict):
         return None
-    return obj
+    eval_id = _normalized_text(value.get("id"), maximum=80)
+    predicate = _normalized_text(value.get("predicate"), maximum=500)
+    eval_pattern = _normalized_text(value.get("pattern"), maximum=100)
+    if (
+        not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", eval_id)
+        or len(predicate) < 12
+        or eval_pattern != pattern
+    ):
+        return None
+    return {"id": eval_id, "predicate": predicate, "pattern": pattern}
+
+
+def normalize_structured_lesson(
+    value: Any,
+    pattern: str,
+) -> Optional[dict[str, Any]]:
+    """Validate and normalize the model-authored lesson and optional eval candidate."""
+    if not isinstance(value, dict):
+        return None
+    instruction = _normalized_text(value.get("instruction"), maximum=800)
+    if not instruction:
+        return None
+    normalized: dict[str, Any] = {
+        "instruction": instruction,
+        "root_cause": _normalized_text(value.get("root_cause"), maximum=500),
+        "what_went_wrong": _normalized_text(value.get("what_went_wrong"), maximum=500),
+    }
+    suggested = normalize_eval_candidate(pattern, value.get("suggested_eval"))
+    if suggested is not None:
+        normalized["suggested_eval"] = suggested
+    return normalized
 
 
 def generate_lesson_structured(pattern: str, examples: list[RatingEntry]) -> Optional[dict]:
@@ -958,25 +1072,36 @@ def generate_lesson_structured(pattern: str, examples: list[RatingEntry]) -> Opt
         "}"
     )
     raw = call_llm(prompt)
-    return _parse_json_object(raw) if raw else None
+    return normalize_structured_lesson(_parse_json_object(raw), pattern) if raw else None
 
 
-def append_eval_candidate(pattern: str, suggested: dict, dry_run: bool = False) -> None:
+def append_eval_candidate(pattern: str, suggested: Any, dry_run: bool = False) -> bool:
     """Record an LLM-suggested binary eval for human ratification.
 
     SAFETY: the predicate is plain English and is NEVER executed. A human ratifies a
     candidate by hand-coding it into evals.py EVALS — that is how the suite grows.
     """
-    if dry_run or not isinstance(suggested, dict):
-        return
+    candidate = normalize_eval_candidate(pattern, suggested)
+    if dry_run or candidate is None:
+        return False
     rec = {
         "proposed": datetime.now().strftime("%Y-%m-%d"),
-        "pattern": pattern,
-        "id": suggested.get("id", ""),
-        "predicate": suggested.get("predicate", ""),
+        **candidate,
         "status": "proposed",
     }
-    append_jsonl(EVAL_CANDIDATES_FILE, rec)
+    with exclusive_lock(EVAL_CANDIDATES_FILE):
+        existing = load_jsonl_objects(EVAL_CANDIDATES_FILE).records
+        if any(
+            record.get("id") == candidate["id"]
+            or (
+                record.get("pattern") == pattern
+                and record.get("predicate") == candidate["predicate"]
+            )
+            for record in existing
+        ):
+            return False
+        append_jsonl_unlocked(EVAL_CANDIDATES_FILE, rec)
+    return True
 
 
 def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict[str, str]:
@@ -987,6 +1112,8 @@ def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict
     """
     if not entries:
         return {}
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     known = sorted(PATTERN_KEYWORDS.keys())
     known_set = set(known)
     result: dict[str, str] = {}
@@ -1019,7 +1146,9 @@ def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict
                 pat = "other"
             e = batch[idx]
             # Key by session|timestamp — session_id alone collides across turns
-            key = f"{e.session_id}|{e.timestamp}" if e.session_id else f"idx-{start+idx}"
+            key = rating_entry_key(e)
+            if not key:
+                continue
             result[key] = pat
             # Persist durable reclass (skip pure other)
             if pat != "other":
@@ -1027,18 +1156,34 @@ def classify_other_llm(entries: list[RatingEntry], batch_size: int = 20) -> dict
     return result
 
 
-def _append_other_reclass(entry: RatingEntry, patterns: list[str], source: str) -> None:
+def _append_other_reclass(entry: RatingEntry, patterns: list[str], source: str) -> bool:
+    key = rating_entry_key(entry)
+    known_patterns = set(PATTERN_KEYWORDS) | set(PR_PATTERN_KEYWORDS) | set(DAG_PATTERN_KEYWORDS)
+    normalized = list(dict.fromkeys(pattern for pattern in patterns if pattern in known_patterns))
+    if not key or not normalized:
+        return False
     rec = {
         "timestamp": entry.timestamp,
         "session_id": entry.session_id,
-        "patterns": patterns,
+        "patterns": normalized,
         "source": source,
         "rating": entry.rating,
         "summary": (entry.sentiment_summary or "")[:160],
     }
-    append_jsonl(OTHER_RECLASS_FILE, rec)
+    with exclusive_lock(OTHER_RECLASS_FILE):
+        existing = load_jsonl_objects(OTHER_RECLASS_FILE).records
+        retained = [
+            record
+            for record in existing
+            if not (
+                record.get("session_id") == entry.session_id
+                and record.get("timestamp") == entry.timestamp
+            )
+        ]
+        rewrite_jsonl_unlocked(OTHER_RECLASS_FILE, [*retained, rec])
     global _RECLASS_CACHE
     _RECLASS_CACHE = None  # invalidate
+    return True
 
 
 # ── Memory writing ────────────────────────────────────────────────────────────
@@ -1058,8 +1203,8 @@ def _existing_rule_and_date(filepath: Path) -> tuple[Optional[str], Optional[str
     txt = filepath.read_text()
     m_last = re.search(r"^\s*last_updated:\s*(\d{4}-\d{2}-\d{2})", txt, re.M)
     m_first = re.search(r"^\s*first_seen:\s*(\d{4}-\d{2}-\d{2})", txt, re.M)
-    last = m_last.group(1) if m_last else None
-    first = m_first.group(1) if m_first else last
+    last = _iso_date(m_last.group(1)) if m_last else None
+    first = _iso_date(m_first.group(1)) if m_first else last
     parts = txt.split("---", 2)             # ['', frontmatter, body]
     body = (parts[2] if len(parts) >= 3 else txt).lstrip("\n")
     rule = body.split("\n\n", 1)[0].strip()  # first paragraph = the rule
@@ -1092,14 +1237,14 @@ def validate_lesson_format(content: str) -> bool:
     return True
 
 
-def write_lesson_file(
+def _write_lesson_file_unlocked(
     pattern: str,
     lesson: str,
     examples: list[RatingEntry],
     memory_dir: Path,
     dry_run: bool = False,
     structured: Optional[dict] = None,
-) -> Path:
+) -> Optional[Path]:
     filename = f"lesson_autogen_{pattern}.md"
     filepath = memory_dir / filename
 
@@ -1173,32 +1318,88 @@ metadata:
 {bullets}
 """
 
+    if not validate_lesson_format(content):
+        print(
+            f"[validation-error] Deferred writing lesson file '{filepath.name}' "
+            "due to failed format validation"
+        )
+        return None
     if not dry_run:
-        if validate_lesson_format(content):
-            atomic_write_text(filepath, content)
-        else:
-            print(f"[validation-error] Deferred writing lesson file '{filepath.name}' due to failed format validation")
+        atomic_write_text(filepath, content)
     return filepath
 
 
-def update_memory_index(new_entries: list[tuple[str, Path]], memory_dir: Path, dry_run: bool = False):
+def write_lesson_file(
+    pattern: str,
+    lesson: str,
+    examples: list[RatingEntry],
+    memory_dir: Path,
+    dry_run: bool = False,
+    structured: Optional[dict] = None,
+) -> Optional[Path]:
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,99}", pattern):
+        print(f"[validation-error] Invalid lesson pattern identifier: {pattern!r}")
+        return None
+    if not examples:
+        print(f"[validation-error] No evidence rows for lesson '{pattern}'")
+        return None
+    filepath = memory_dir / f"lesson_autogen_{pattern}.md"
+    normalized_structured = (
+        normalize_structured_lesson(structured, pattern)
+        if structured is not None
+        else None
+    )
+    if dry_run:
+        return _write_lesson_file_unlocked(
+            pattern,
+            lesson,
+            examples,
+            memory_dir,
+            dry_run=True,
+            structured=normalized_structured,
+        )
+    with exclusive_lock(filepath):
+        return _write_lesson_file_unlocked(
+            pattern,
+            lesson,
+            examples,
+            memory_dir,
+            structured=normalized_structured,
+        )
+
+
+def update_memory_index(
+    new_entries: list[tuple[str, Path]],
+    memory_dir: Path,
+    dry_run: bool = False,
+) -> int:
     index_path = memory_dir / "MEMORY.md"
-    if not index_path.exists():
-        return
-    content = index_path.read_text()
-    # consolidate_memory.py owns the autogen index region once collapsed — don't
-    # re-add individual lines (it regenerates one compact line from disk).
-    if "[Auto-lessons (" in content:
-        return 0
-    added = 0
-    for pattern, filepath in new_entries:
-        if filepath.name not in content:
-            line = f"- [Auto-lesson: {pattern.replace('_', ' ')}]({filepath.name}) — auto-generated from ratings data\n"
-            content += line
-            added += 1
-    if not dry_run and added > 0:
-        atomic_write_text(index_path, content)
-    return added
+
+    def update() -> int:
+        if not index_path.exists():
+            return 0
+        content = index_path.read_text()
+        # consolidate_memory.py owns the autogen index region once collapsed — don't
+        # re-add individual lines (it regenerates one compact line from disk).
+        if "[Auto-lessons (" in content:
+            return 0
+        added = 0
+        for pattern, filepath in new_entries:
+            if filepath.name not in content:
+                line = (
+                    f"- [Auto-lesson: {pattern.replace('_', ' ')}]({filepath.name}) "
+                    "— auto-generated from ratings data\n"
+                )
+                content += line
+                added += 1
+        if not dry_run and added > 0:
+            atomic_write_text(index_path, content)
+        return added
+
+    if dry_run:
+        return update()
+    with exclusive_lock(index_path):
+        return update()
 
 
 # ── Diagnostic report ─────────────────────────────────────────────────────────
@@ -1209,6 +1410,7 @@ def generate_report(
     pattern_data: dict,
     report_dir: Path,
     dry_run: bool = False,
+    threshold: int = 4,
 ) -> Path:
     now = datetime.now()
     report_path = report_dir / f"diagnostic_{now.strftime('%Y-%m-%d')}.md"
@@ -1221,7 +1423,7 @@ def generate_report(
     dist_str = "  ".join(f"{r}★:{dist[r]}" for r in sorted(dist))
 
     rows = "\n".join(
-        f"| {p} | {d['count']} | {d['count']/low_n*100:.0f}% "
+        f"| {p} | {d['count']} | {(d['count']/low_n*100) if low_n else 0:.0f}% "
         f"| {d['avg_rating']:.1f} | {d['action']} |"
         for p, d in sorted(pattern_data.items(), key=lambda x: -x[1]["count"])
     )
@@ -1264,7 +1466,7 @@ def generate_report(
 | Metric | Value |
 |--------|-------|
 | Total rated entries | {total} |
-| Low-rated (≤{low_entries[0].rating if low_entries else '?'} threshold) | {low_n} ({low_n/total*100:.0f}%) |
+| Low-rated (≤{threshold} threshold) | {low_n} ({(low_n/total*100) if total else 0:.0f}%) |
 | Overall avg rating | {avg_all:.2f}/10 |
 | Rating distribution | {dist_str} |
 
@@ -1301,7 +1503,7 @@ def log_run(pattern_data: dict, lessons_log: Path):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main():
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Self-improving AI feedback loop")
     ap.add_argument("--source",          default="ratings",
                     choices=["ratings", "pr_review", "dag", "failures"],
@@ -1312,7 +1514,11 @@ def main():
     ap.add_argument("--no-llm",          action="store_true", help="Use template lessons only")
     ap.add_argument("--report",          action="store_true", help="Diagnostic report only, no writes")
     ap.add_argument("--classify-other",  action="store_true", help="LLM-classify 'other' entries too")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if not 1 <= args.threshold <= 10:
+        ap.error("--threshold must be between 1 and 10")
+    if args.min_occurrences <= 0:
+        ap.error("--min-occurrences must be positive")
 
     # ── Pick source ───────────────────────────────────────────────────────────
     if args.source == "ratings":
@@ -1321,7 +1527,7 @@ def main():
         low = [e for e in all_entries if e.rating <= args.threshold]
         active_patterns   = PATTERN_KEYWORDS
         active_templates  = LESSON_TEMPLATES
-    elif args.source in ("pr_review", "dag", "failures"):
+    else:
         domain = args.source if args.source != "failures" else "all"
         label  = {"pr_review": "PR review", "dag": "DAG/Dataform", "failures": "all failures"}[args.source]
         print(f"[self_improve] Source: FAILURES dir ({label})")
@@ -1336,9 +1542,6 @@ def main():
         else:
             active_patterns  = {**PATTERN_KEYWORDS, **PR_PATTERN_KEYWORDS, **DAG_PATTERN_KEYWORDS}
             active_templates = {**LESSON_TEMPLATES, **PR_LESSON_TEMPLATES, **DAG_LESSON_TEMPLATES}
-    else:
-        print(f"Unknown source: {args.source}")
-        return
 
     print(f"[self_improve] {len(all_entries)} total | {len(low)} in scope")
 
@@ -1349,7 +1552,7 @@ def main():
         return matched or ["other"]
 
     for e in low:
-        e.patterns = classify_for_source(e)
+        e.patterns = classify_entry(e) if args.source == "ratings" else classify_for_source(e)
 
     # Optional: LLM-classify 'other' bucket
     # NOTE: intentionally independent of --no-llm. --no-llm only disables the
@@ -1363,8 +1566,9 @@ def main():
         print(f"[self_improve] LLM-classifying {len(other_entries)} 'other' entries...")
         label_map = classify_other_llm(other_entries)
         for e in other_entries:
-            if e.session_id in label_map:
-                e.patterns = [label_map[e.session_id]]
+            key = rating_entry_key(e)
+            if key and label_map.get(key) not in {None, "other"}:
+                e.patterns = [label_map[key]]
 
     # Group
     pattern_groups: dict[str, list[RatingEntry]] = defaultdict(list)
@@ -1383,13 +1587,21 @@ def main():
     }
 
     if args.report:
-        rpt = generate_report(all_entries, low, pattern_data, DIAGNOSTICS, args.dry_run)
+        rpt = generate_report(
+            all_entries,
+            low,
+            pattern_data,
+            DIAGNOSTICS,
+            args.dry_run,
+            threshold=args.threshold,
+        )
         print(f"[self_improve] Report → {rpt}")
-        return
+        return 0
 
     # Generate lessons
-    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+        DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
 
     new_files: list[tuple[str, Path]] = []
 
@@ -1409,9 +1621,8 @@ def main():
         if not args.no_llm:
             structured = generate_lesson_structured(p, data["examples"])
             if structured:
-                lesson = (structured.get("instruction") or "").strip() or None
-                if lesson:
-                    print(f"    [llm] {lesson[:80]}...")
+                lesson = structured["instruction"]
+                print(f"    [llm] {lesson[:80]}...")
 
         if not lesson:
             # Prefer hand templates; else ACE Reflector distill (never the old
@@ -1433,18 +1644,31 @@ def main():
             else:
                 print(f"    [template] {lesson[:80]}...")
 
-        filepath = write_lesson_file(p, lesson, data["examples"], MEMORY_DIR, args.dry_run,
-                                     structured=structured)
+        filepath = write_lesson_file(
+            p,
+            lesson,
+            data["examples"],
+            MEMORY_DIR,
+            args.dry_run,
+            structured=structured,
+        )
+        if filepath is None:
+            data["action"] = "validation_failed"
+            continue
         tag = "[DRY RUN] would write" if args.dry_run else "written"
         print(f"    → {tag}: {filepath.name}")
 
         # LLM-suggested binary eval → candidate for human ratification (NEVER auto-exec'd).
         if structured and structured.get("suggested_eval"):
-            append_eval_candidate(p, structured["suggested_eval"], args.dry_run)
-            if not args.dry_run:
+            added_candidate = append_eval_candidate(
+                p,
+                structured["suggested_eval"],
+                args.dry_run,
+            )
+            if added_candidate:
                 print(f"    → eval candidate logged: {structured['suggested_eval'].get('id', '')}")
 
-        data["action"] = "lesson_written"
+        data["action"] = "lesson_previewed" if args.dry_run else "lesson_written"
         new_files.append((p, filepath))
 
     # Update MEMORY.md index
@@ -1457,10 +1681,18 @@ def main():
     if not args.dry_run:
         log_run(pattern_data, LESSONS_LOG)
 
-    rpt = generate_report(all_entries, low, pattern_data, DIAGNOSTICS, args.dry_run)
+    rpt = generate_report(
+        all_entries,
+        low,
+        pattern_data,
+        DIAGNOSTICS,
+        args.dry_run,
+        threshold=args.threshold,
+    )
     print(f"[self_improve] Diagnostic → {rpt}")
     print(f"\n[self_improve] Done. {len(new_files)} lessons {'previewed' if args.dry_run else 'written'}.")
+    return 0
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
+    raise SystemExit(main())
