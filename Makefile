@@ -5,7 +5,7 @@ install-dev:
 	bun install --frozen-lockfile
 
 test:
-	python3 -m pytest --cov=learning --cov-branch --cov-fail-under=81 -q
+	python3 -m pytest --cov=learning --cov-branch --cov-fail-under=93 -q
 
 coverage-foundations:
 	python3 -m pytest tests/test_state_io.py tests/test_review_store.py tests/test_harness_config.py \
@@ -20,12 +20,19 @@ coverage-foundations:
 		tests/test_lesson_evolve.py tests/test_review_workflow.py \
 		tests/test_skill_autofix_lifecycle.py tests/test_skill_burnin.py \
 		tests/test_autofix_end_to_end.py tests/test_hardening.py \
+		tests/test_ace_lifecycle.py tests/test_agent_rollouts.py \
+		tests/test_agent_rollouts_lifecycle.py tests/test_self_harness.py \
+		tests/test_consolidate_memory.py tests/test_chronic_failures.py \
+		tests/test_intent_how_audit.py \
 		--cov=state_io --cov=review_store --cov=harness_config --cov=surface_gate \
 		--cov=ratings_hygiene --cov=enforcement_promotion --cov=summary_ingest \
 		--cov=lesson_dedup --cov=pattern_promotion --cov=judge_outcomes \
 		--cov=measure_effectiveness --cov=held_out_regression --cov=harness_changelog \
 		--cov=self_improve --cov=evals --cov=lesson_evolve \
 		--cov=skill_autofix --cov=skill_burnin \
+		--cov=ace_reflector --cov=ace_playbook --cov=agent_rollouts \
+		--cov=self_harness --cov=consolidate_memory --cov=chronic_failures \
+		--cov=intent_how_audit \
 		--cov-branch --cov-fail-under=100 -q
 
 lint:

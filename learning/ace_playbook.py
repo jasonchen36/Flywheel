@@ -30,14 +30,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
+import math
 import re
 import sys
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 from harness_paths import HARNESS_HOME, LESSONS_DIR
-from state_io import atomic_write_json, atomic_write_text
+from state_io import atomic_write_json, atomic_write_text, exclusive_locks, try_read_json_object
 
 SCORES_FILE = HARNESS_HOME / "MEMORY/STATE/effectiveness_scores.json"
 OUT_JSON = HARNESS_HOME / "MEMORY/STATE/ace_playbook.json"
@@ -149,13 +149,36 @@ def bullet_id(pattern: str, rule: str) -> str:
     return f"b_{pattern[:40]}_{h}"
 
 
-def load_scores() -> dict[str, dict[str, Any]]:
-    if not SCORES_FILE.exists():
-        return {}
+def safe_nonnegative_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return 0
     try:
-        return json.loads(SCORES_FILE.read_text()).get("scores", {})
-    except (json.JSONDecodeError, OSError):
+        number = int(value)
+    except (OverflowError, ValueError):
+        return 0
+    return max(0, number)
+
+
+def safe_finite_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return 0.0
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def load_scores() -> dict[str, dict[str, Any]]:
+    data, _error = try_read_json_object(SCORES_FILE)
+    raw_scores = data.get("scores")
+    if not isinstance(raw_scores, dict):
         return {}
+    return {
+        pattern: row
+        for pattern, row in raw_scores.items()
+        if isinstance(pattern, str) and pattern and isinstance(row, dict)
+    }
 
 
 def load_lessons(use_llm: bool = False) -> list[dict[str, Any]]:
@@ -165,15 +188,19 @@ def load_lessons(use_llm: bool = False) -> list[dict[str, Any]]:
         return out
     for p in sorted(LESSONS_DIR.glob("lesson_autogen_*.md")):
         pattern = p.name.removeprefix("lesson_autogen_").removesuffix(".md")
-        text = p.read_text(errors="replace")
+        try:
+            text = p.read_text(errors="replace")
+        except OSError as exc:
+            print(f"[ace_playbook] unreadable lesson {p.name}: {exc}")
+            continue
         occ = 0
         avg = 0.0
         m = re.search(r"occurrence_count:\s*(\d+)", text)
         if m:
-            occ = int(m.group(1))
+            occ = safe_nonnegative_int(m.group(1))
         m = re.search(r"avg_rating:\s*([\d.]+)", text)
         if m:
-            avg = float(m.group(1))
+            avg = safe_finite_float(m.group(1))
 
         ref = reflect_from_lesson_file(text, pattern, use_llm=use_llm)
         # Absolute last line: never keep a stub description
@@ -371,7 +398,7 @@ def build_playbook(
                         break
 
         help_d, harm_d = VERDICT_COUNTERS.get(verdict, (0, 0))
-        q = int(les.get("quality", 0))
+        q = min(4, safe_nonnegative_int(les.get("quality", 0)))
         src = les.get("reflect_source", "passthrough")
         stats["by_source"][src] = stats["by_source"].get(src, 0) + 1
         if les.get("weak_input"):
@@ -394,9 +421,9 @@ def build_playbook(
         # that was ranking stubs above real strategy.
         helpful = help_d
         if q >= 3:
-            helpful += max(0, les.get("occurrence_count", 0) // 3)
+            helpful += safe_nonnegative_int(les.get("occurrence_count", 0)) // 3
         elif q >= 2:
-            helpful += max(0, les.get("occurrence_count", 0) // 6)
+            helpful += safe_nonnegative_int(les.get("occurrence_count", 0)) // 6
 
         ace_sec = les.get("section", "strategy")
         rule = les.get("rule") or ""
@@ -520,7 +547,7 @@ def render_md(playbook: dict) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ACE playbook curator")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--max", type=int, default=40, help="max bullets to keep")
@@ -528,7 +555,13 @@ def main() -> int:
                     help="min quality_score for active injection (0-4)")
     ap.add_argument("--llm", action="store_true",
                     help="allow Reflector LLM for residual weak rules")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.max <= 0:
+        print("[ace_playbook] --max must be positive")
+        return 2
+    if not 0 <= args.min_quality <= 4:
+        print("[ace_playbook] --min-quality must be between 0 and 4")
+        return 2
 
     pb = build_playbook(args.max, min_quality=args.min_quality, use_llm=args.llm)
     md = render_md(pb)
@@ -557,14 +590,16 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    atomic_write_json(OUT_JSON, pb)
-    atomic_write_text(OUT_MD, md)
-    day = datetime.now().strftime("%Y-%m-%d")
-    atomic_write_text(DIAG / f"ace_playbook_{day}.md", md)
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    diagnostic = DIAG / f"ace_playbook_{day}.md"
+    with exclusive_locks([OUT_JSON, OUT_MD, diagnostic]):
+        atomic_write_json(OUT_JSON, pb)
+        atomic_write_text(OUT_MD, md)
+        atomic_write_text(diagnostic, md)
     print(f"[ace_playbook] Wrote {OUT_JSON}")
     print(f"[ace_playbook] Wrote {OUT_MD}")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

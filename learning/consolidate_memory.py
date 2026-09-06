@@ -1,24 +1,8 @@
-#!/usr/bin/env python3
-"""
-MEMORY.md consolidation pass (#4) — keep the always-loaded index under budget.
+"""Keep the always-loaded MEMORY.md lesson index within a bounded line budget.
 
-MEMORY.md loads into EVERY session, so it has a line budget (~200). Auto-generated
-lessons accumulate one verbose index line each ("auto-generated from ratings data"
-×N) — low signal, and redundant now that FailurePatternReminder injects the lesson
-files directly when task-relevant. This pass:
-
-  1. Collapses the N `- [Auto-lesson: X](lesson_autogen_X.md)` lines into ONE
-     compact line that still lists the pattern names (recall-friendly).
-  2. Reports autogen lessons that duplicate a hand-written feedback memory
-     (keyword overlap) — REPORT ONLY, never auto-deletes hand-written memory.
-  3. Reports the line budget.
-
-SAFE: never deletes lesson files; backs up MEMORY.md before writing; idempotent
-(re-running after collapse is a no-op); dry-run is the default.
-
-Usage:
-  python consolidate_memory.py            # dry-run: print diff + report, write nothing
-  python consolidate_memory.py --apply    # back up MEMORY.md.bak, then write
+The consolidator replaces individual generated-lesson index rows with one compact,
+idempotent row. It never deletes lesson files or handwritten memory, and an apply
+runs under the same sidecar lock used by self-improvement index updates.
 """
 
 from __future__ import annotations
@@ -26,7 +10,13 @@ from __future__ import annotations
 import argparse
 import difflib
 import re
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import cast
+
 from harness_paths import HARNESS_HOME
+from state_io import atomic_write_text, exclusive_lock
 
 MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
 MEMORY_MD = MEMORY_DIR / "MEMORY.md"
@@ -36,111 +26,169 @@ AUTOGEN_RE = re.compile(r"^- \[Auto-lesson:[^\]]*\]\((lesson_autogen_[^)]+\.md)\
 COLLAPSED_RE = re.compile(r"^- \[Auto-lessons \(\d+\)\]")
 
 
-def tokens(s: str) -> set[str]:
-    return {w for w in re.split(r"[^a-z]+", s.lower()) if len(w) > 3}
+def tokens(value: str) -> set[str]:
+    return {word for word in re.split(r"[^a-z]+", value.lower()) if len(word) > 3}
 
 
-def find_duplicates(patterns: list[str]) -> list[tuple[str, str]]:
-    """autogen pattern ↔ hand-written feedback memory with strong keyword overlap."""
-    hand = [f for f in MEMORY_DIR.glob("*.md")
-            if not f.name.startswith("lesson_autogen_") and f.name not in ("MEMORY.md",)]
-    dups = []
-    for p in patterns:
-        ptoks = tokens(p.replace("_", " "))
-        for f in hand:
-            ftoks = tokens(f.stem.replace("_", " "))
-            overlap = ptoks & ftoks
-            if len(overlap) >= 2:  # ≥2 shared meaningful tokens → likely same concept
-                dups.append((p, f.name))
-    return dups
+def find_duplicates(
+    patterns: list[str], memory_dir: Path | None = None
+) -> list[tuple[str, str]]:
+    """Return generated patterns with strong filename overlap to handwritten memory."""
+    directory = memory_dir or MEMORY_DIR
+    try:
+        hand = [
+            path
+            for path in directory.glob("*.md")
+            if path.name != "MEMORY.md"
+            and not path.name.startswith("lesson_autogen_")
+            and path.is_file()
+            and not path.is_symlink()
+        ]
+    except OSError:
+        return []
+    duplicates: list[tuple[str, str]] = []
+    for pattern in patterns:
+        pattern_tokens = tokens(pattern.replace("_", " "))
+        for path in hand:
+            overlap = pattern_tokens & tokens(path.stem.replace("_", " "))
+            if len(overlap) >= 2:
+                duplicates.append((pattern, path.name))
+    return duplicates
 
 
-def consolidate(text: str) -> tuple[str, dict]:
+def discover_patterns(memory_dir: Path) -> list[str]:
+    try:
+        paths = memory_dir.glob("lesson_autogen_*.md")
+        return sorted(
+            path.stem.removeprefix("lesson_autogen_")
+            for path in paths
+            if path.is_file() and not path.is_symlink()
+        )
+    except OSError:
+        return []
+
+
+def consolidate(text: str, memory_dir: Path | None = None) -> tuple[str, dict[str, object]]:
+    directory = memory_dir or MEMORY_DIR
     lines = text.split("\n")
-    # Disk is the source of truth — regenerate from the actual lesson files so the
-    # line auto-reflects new patterns and never drifts from what's on disk.
-    patterns = sorted(p.stem.replace("lesson_autogen_", "")
-                      for p in MEMORY_DIR.glob("lesson_autogen_*.md"))
-    # Remove every existing representation: individual lines AND any prior collapsed line.
-    remove_idx = [i for i, l in enumerate(lines) if AUTOGEN_RE.match(l) or COLLAPSED_RE.match(l)]
-    already = any(COLLAPSED_RE.match(l) for l in lines)
-
-    info = {"autogen_count": sum(1 for l in lines if AUTOGEN_RE.match(l)),
-            "already_collapsed": already, "before_lines": len(lines),
-            "patterns": patterns, "duplicates": find_duplicates(patterns)}
-
+    patterns = discover_patterns(directory)
+    remove_idx = [
+        index
+        for index, line in enumerate(lines)
+        if AUTOGEN_RE.match(line) or COLLAPSED_RE.match(line)
+    ]
+    already = any(COLLAPSED_RE.match(line) for line in lines)
+    info: dict[str, object] = {
+        "autogen_count": sum(1 for line in lines if AUTOGEN_RE.match(line)),
+        "already_collapsed": already,
+        "before_lines": len(lines),
+        "patterns": patterns,
+        "duplicates": find_duplicates(patterns, directory),
+    }
     if not patterns or not remove_idx:
         info["after_lines"] = len(lines)
         return text, info
 
-    rep = f"lesson_autogen_{patterns[0]}.md"
+    representative = f"lesson_autogen_{patterns[0]}.md"
     names = ", ".join(patterns)
-    # Invisible HTML comment lists every filename so self_improve.update_memory_index's
-    # `filename in content` check passes → it never re-appends individual lines (no churn).
-    filerefs = " ".join(f"lesson_autogen_{p}.md" for p in patterns)
-    collapsed = (f"- [Auto-lessons ({len(patterns)})]({rep}) — {names}; "
-                 f"auto-generated by self_improve.py, injected by FailurePatternReminder when task-relevant "
-                 f"<!-- {filerefs} -->")
+    file_refs = " ".join(f"lesson_autogen_{pattern}.md" for pattern in patterns)
+    collapsed = (
+        f"- [Auto-lessons ({len(patterns)})]({representative}) — {names}; "
+        "auto-generated by self_improve.py, injected by FailurePatternReminder "
+        f"when task-relevant <!-- {file_refs} -->"
+    )
 
-    insert_at, drop = remove_idx[0], set(remove_idx)
-    out = []
-    for i, l in enumerate(lines):
-        if i == insert_at:
-            out.append(collapsed)
-        elif i in drop:
-            continue
-        else:
-            out.append(l)
-
-    new_text = "\n".join(out)
-    info["after_lines"] = len(out)
+    insert_at = remove_idx[0]
+    dropped = set(remove_idx)
+    output: list[str] = []
+    for index, line in enumerate(lines):
+        if index == insert_at:
+            output.append(collapsed)
+        elif index not in dropped:
+            output.append(line)
+    new_text = "\n".join(output)
+    info["after_lines"] = len(output)
     return new_text, info
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true", help="back up + write (default: dry-run)")
-    args = ap.parse_args()
+def backup_path(path: Path) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    return path.with_name(f"{path.name}.bak.{timestamp}.{uuid.uuid4().hex[:8]}")
 
-    if not MEMORY_MD.exists():
-        print(f"MEMORY.md not found at {MEMORY_MD}")
-        return 1
 
-    original = MEMORY_MD.read_text()
-    new_text, info = consolidate(original)
-
-    print(f"Lines: {info['before_lines']} → {info['after_lines']} (budget {BUDGET})")
+def print_report(original: str, new_text: str, info: dict[str, object]) -> None:
+    before_lines = cast(int, info["before_lines"])
+    after_lines = cast(int, info["after_lines"])
+    print(f"Lines: {before_lines} → {after_lines} (budget {BUDGET})")
     print(f"Autogen index lines collapsed: {info['autogen_count']}")
     if info["already_collapsed"] and info["autogen_count"] == 0:
         print("Already consolidated — nothing to do.")
-    over = info["after_lines"] - BUDGET
+    over = after_lines - BUDGET
     print(f"Budget: {'OK' if over <= 0 else f'OVER by {over} lines'}")
 
-    if info["duplicates"]:
+    duplicates = info.get("duplicates")
+    if isinstance(duplicates, list) and duplicates:
         print("\nPossible duplicates (autogen ↔ hand-written) — review manually, NOT auto-removed:")
-        for p, f in info["duplicates"]:
-            print(f"  • lesson_autogen_{p}  ~  {f}")
+        for pattern, filename in duplicates:
+            print(f"  • lesson_autogen_{pattern}  ~  {filename}")
 
     if new_text == original:
         print("\nNo changes.")
-        return 0
-
-    diff = difflib.unified_diff(original.split("\n"), new_text.split("\n"),
-                               "MEMORY.md (before)", "MEMORY.md (after)", lineterm="")
+        return
+    diff = difflib.unified_diff(
+        original.split("\n"),
+        new_text.split("\n"),
+        "MEMORY.md (before)",
+        "MEMORY.md (after)",
+        lineterm="",
+    )
     print("\n--- diff ---")
     print("\n".join(diff))
 
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--apply", action="store_true", help="back up + write (default: dry-run)")
+    args = parser.parse_args(argv)
+
+    if not MEMORY_MD.exists() or not MEMORY_MD.is_file() or MEMORY_MD.is_symlink():
+        print(f"MEMORY.md not found or unsafe at {MEMORY_MD}")
+        return 1
+
     if not args.apply:
-        print("\n[dry-run] no files written. Re-run with --apply to commit.")
+        try:
+            original = MEMORY_MD.read_text()
+        except OSError as exc:
+            print(f"Unable to read MEMORY.md: {exc}")
+            return 1
+        new_text, info = consolidate(original, MEMORY_DIR)
+        print_report(original, new_text, info)
+        if new_text != original:
+            print("\n[dry-run] no files written. Re-run with --apply to commit.")
         return 0
 
-    backup = MEMORY_MD.with_suffix(".md.bak")
-    backup.write_text(original)
-    MEMORY_MD.write_text(new_text)
+    try:
+        with exclusive_lock(MEMORY_MD):
+            original = MEMORY_MD.read_text()
+            new_text, info = consolidate(original, MEMORY_DIR)
+            print_report(original, new_text, info)
+            if new_text == original:
+                return 0
+            backup = backup_path(MEMORY_MD)
+            atomic_write_text(backup, original)
+            try:
+                atomic_write_text(MEMORY_MD, new_text)
+            except BaseException:
+                atomic_write_text(MEMORY_MD, original)
+                raise
+    except (OSError, TimeoutError) as exc:
+        print(f"Unable to consolidate MEMORY.md: {exc}")
+        return 1
+
     print(f"\nBacked up → {backup}")
     print(f"Wrote → {MEMORY_MD} ({info['after_lines']} lines)")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

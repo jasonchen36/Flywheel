@@ -165,6 +165,13 @@ run_stage() {
   return "$code"
 }
 
+skip_stage() {
+  local stage=$1 reason=$2 log="$LOG_DIR/$1.log"
+  STAGE_TOTAL=$((STAGE_TOTAL + 1))
+  printf '%s\n' "$reason" > "$log"
+  record_status "$stage" skipped 0 0
+}
+
 run_surface_gate_selftest() {
   local log="$LOG_DIR/surface_gate_selftest.log"
   local started_ms finished_ms duration_ms code
@@ -218,10 +225,19 @@ run_pipeline() {
   run_stage lesson_evolve "${PY[@]}" lesson_evolve.py || true
   run_stage review_queue "${PY[@]}" review_queue.py --auto-drain \
     --min-age "${SELF_IMPROVE_AUTO_DRAIN_MIN_AGE:-0}" || true
-  run_stage held_out_suite "${PY[@]}" held_out_suite.py --gate || true
-  run_stage agent_rollouts "${PY[@]}" agent_rollouts.py --gate || true
-  run_stage self_harness "${PY[@]}" self_harness.py --apply --skip-rollouts || true
-  run_stage consolidate_memory "${PY[@]}" consolidate_memory.py --apply || true
+  local validation_ok=1
+  run_stage held_out_suite "${PY[@]}" held_out_suite.py --gate || validation_ok=0
+  run_stage agent_rollouts "${PY[@]}" agent_rollouts.py --gate || validation_ok=0
+  if [ "$validation_ok" -eq 1 ]; then
+    if run_stage self_harness "${PY[@]}" self_harness.py --apply --gate --skip-rollouts; then
+      run_stage consolidate_memory "${PY[@]}" consolidate_memory.py --apply || true
+    else
+      skip_stage consolidate_memory "Skipped: self-harness validation or ACE rebuild failed."
+    fi
+  else
+    skip_stage self_harness "Skipped: held-out or rollout prerequisite failed."
+    skip_stage consolidate_memory "Skipped: self-harness was not accepted."
+  fi
   run_stage session_graphiti_autoseed "${PY[@]}" session_graphiti_autoseed.py || true
   run_stage sync_graph_memory "${PY[@]}" sync_graph_memory.py || true
   run_stage flush_graphiti "${PY[@]}" flush_graphiti_pending.py --limit 50 || true

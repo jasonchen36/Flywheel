@@ -1,13 +1,9 @@
-#!/usr/bin/env python3
-"""intent_how_audit.py — flag HOW scaffolding that may be bitter-lesson dead weight.
+"""Audit procedural HOW scaffolding that lacks intent or outcome framing.
 
-Scans skill/command markdown for procedural HOW patterns vs intent/outcome language.
-Writes a report; does NOT auto-delete (humans own deprecation per editable_surfaces).
-
-Usage:
-  pyenv exec python3 intent_how_audit.py
-  pyenv exec python3 intent_how_audit.py --json
+The command is diagnostic only: it never deletes or edits scanned skills. Safety
+constraints remain explicitly protected from deprecation recommendations.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -15,6 +11,8 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator, TypedDict
+
 from harness_paths import HARNESS_HOME
 from state_io import atomic_write_json, atomic_write_text
 
@@ -26,54 +24,80 @@ ROOTS = [
 ]
 DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 
-# Heuristic: imperative multi-step recipes without outcome framing
 HOW_MARKERS = [
-    re.compile(r"(?i)^\s*\d+\.\s+(run|execute|open|type|click|always first|must always)\b"),
-    re.compile(r"(?i)\bstep[- ]by[- ]step\b"),
-    re.compile(r"(?i)\bexactly this command\b"),
-    re.compile(r"(?i)\byou must first\b.*\bthen\b.*\bthen\b"),
+    re.compile(
+        r"^\s*\d+\.\s+(run|execute|open|type|click|always first|must always)\b",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    re.compile(r"\bstep[- ]by[- ]step\b", re.IGNORECASE),
+    re.compile(r"\bexactly this command\b", re.IGNORECASE),
+    re.compile(r"\byou must first\b.*\bthen\b.*\bthen\b", re.IGNORECASE),
 ]
 INTENT_MARKERS = [
-    re.compile(r"(?i)\buse when\b"),
-    re.compile(r"(?i)\boutcome\b|\bacceptance\b|\bverify\b|\bsuccess criteria\b"),
-    re.compile(r"(?i)\bmust not\b|\bnever\b|\bprohibit"),  # constraints stay
+    re.compile(r"\buse when\b", re.IGNORECASE),
+    re.compile(r"\boutcome\b|\bacceptance\b|\bverify\b|\bsuccess criteria\b", re.IGNORECASE),
+    re.compile(r"\bmust not\b|\bnever\b|\bprohibit", re.IGNORECASE),
 ]
-# Safety constraints should NOT be flagged for deletion
 CONSTRAINT_MARKERS = [
-    re.compile(r"(?i)\binfra-before-app\b|\bnever post without approval\b|\bbq rm\b|\bforce-push\b"),
-    re.compile(r"(?i)\bblast radius\b|\bconfirm\b|\bhard gate\b"),
+    re.compile(r"\binfra-before-app\b|\bnever post without approval\b|\bbq rm\b|\bforce-push\b", re.IGNORECASE),
+    re.compile(r"\bblast radius\b|\bconfirm\b|\bhard gate\b", re.IGNORECASE),
 ]
 
 
-def iter_skills():
-    for root in ROOTS:
-        if not root.exists():
+class AuditItem(TypedDict):
+    path: str
+    lines: int
+    how_hits: int
+    intent_hits: int
+    constraint_hits: int
+    recommendation: str
+    flagged: bool
+
+
+def is_candidate(path: Path) -> bool:
+    return path.name == "SKILL.md" or (
+        path.suffix.lower() == ".md" and "skill" in path.name.lower()
+    )
+
+
+def iter_skills(roots: list[Path] | None = None) -> Iterator[Path]:
+    """Yield unique regular Markdown candidates without following symlinks."""
+    seen: set[Path] = set()
+    for root in roots if roots is not None else ROOTS:
+        try:
+            if not root.exists() or not root.is_dir() or root.is_symlink():
+                continue
+            candidates = list(root.rglob("*")) + list(root.glob("*.md"))
+        except OSError:
             continue
-        for p in root.rglob("*"):
-            if p.name in ("SKILL.md",) or p.suffix in (".md",) and "skill" in p.name.lower():
-                if "gstack" in p.parts or "node_modules" in p.parts:
-                    continue
-                if p.is_file() and p.suffix == ".md":
-                    yield p
-        for p in root.glob("*.md"):
-            yield p
+        for path in candidates:
+            if path in seen or not is_candidate(path):
+                continue
+            if "gstack" in path.parts or "node_modules" in path.parts:
+                continue
+            try:
+                safe = path.is_file() and not path.is_symlink()
+            except OSError:
+                safe = False
+            if safe:
+                seen.add(path)
+                yield path
 
 
-def score_file(path: Path) -> dict | None:
+def score_file(path: Path) -> AuditItem | None:
     try:
         text = path.read_text(errors="replace")
-    except Exception:
+    except OSError:
         return None
     if len(text) < 80:
         return None
-    how = sum(1 for r in HOW_MARKERS if r.search(text))
-    intent = sum(1 for r in INTENT_MARKERS if r.search(text))
-    constraint = sum(1 for r in CONSTRAINT_MARKERS if r.search(text))
+    how = sum(1 for pattern in HOW_MARKERS if pattern.search(text))
+    intent = sum(1 for pattern in INTENT_MARKERS if pattern.search(text))
+    constraint = sum(1 for pattern in CONSTRAINT_MARKERS if pattern.search(text))
     lines = text.count("\n") + 1
-    # Flag large files heavy on HOW, light on intent, not constraint-heavy
-    flag = lines > 120 and how >= 2 and intent == 0 and constraint == 0
-    flag = flag or (how >= 3 and intent <= 1 and constraint == 0 and lines > 80)
-    if not flag and how < 2:
+    flagged = lines > 120 and how >= 2 and intent == 0 and constraint == 0
+    flagged = flagged or (how >= 3 and intent <= 1 and constraint == 0 and lines > 80)
+    if not flagged and how < 2:
         return None
     return {
         "path": str(path),
@@ -81,60 +105,80 @@ def score_file(path: Path) -> dict | None:
         "how_hits": how,
         "intent_hits": intent,
         "constraint_hits": constraint,
-        "recommendation": (
-            "review_for_deprecation_or_intent_rewrite"
-            if flag
-            else "monitor"
-        ),
-        "flagged": flag,
+        "recommendation": "review_for_deprecation_or_intent_rewrite" if flagged else "monitor",
+        "flagged": flagged,
     }
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args()
-    seen = set()
-    results = []
-    for p in iter_skills():
-        rp = str(p.resolve()) if p.exists() else str(p)
-        if rp in seen:
-            continue
-        seen.add(rp)
-        r = score_file(p)
-        if r:
-            results.append(r)
-    flagged = [r for r in results if r["flagged"]]
-    report = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "scanned_unique": len(seen),
-        "candidates": len(results),
+def build_report(items: list[AuditItem], scanned: int, timestamp: datetime, limit: int) -> dict:
+    flagged = [item for item in items if item["flagged"]]
+    ranked = sorted(flagged, key=lambda item: (-item["how_hits"], item["path"]))
+    return {
+        "ts": timestamp.isoformat(),
+        "scanned_unique": scanned,
+        "candidates": len(items),
         "flagged": len(flagged),
-        "items": sorted(flagged, key=lambda x: -x["how_hits"])[:40],
+        "items": ranked[:limit],
+        "remaining_flagged": max(0, len(ranked) - limit),
         "note": "Do not auto-delete. Convert HOW recipes to intent/outcome or remove if SOTA already satisfies.",
         "ref": "https://danielmiessler.com/blog/intent-engineering",
     }
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    out = DIAG / f"intent_how_audit_{day}.json"
-    atomic_write_json(out, report)
-    md = DIAG / f"intent_how_audit_{day}.md"
+
+
+def render_markdown(report: dict, day: str, limit: int) -> str:
     lines = [
         f"# Intent vs HOW audit — {day}\n",
-        f"Flagged: {len(flagged)} / scanned files with HOW signals: {len(results)}\n\n",
+        f"Flagged: {report['flagged']} / scanned files with HOW signals: {report['candidates']}\n\n",
         "Recommendation: rewrite as intent/outcome or delete if model defaults cover it. Keep safety constraints.\n\n",
     ]
-    for result in sorted(flagged, key=lambda item: -item["how_hits"])[:25]:
-        lines.append(
-            f"- **{result['recommendation']}** `{result['path']}` "
-            f"(how={result['how_hits']} intent={result['intent_hits']} lines={result['lines']})\n"
-        )
-    atomic_write_text(md, "".join(lines))
+    items = report.get("items")
+    if isinstance(items, list):
+        for item in items[:limit]:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- **{item.get('recommendation')}** `{item.get('path')}` "
+                f"(how={item.get('how_hits')} intent={item.get('intent_hits')} lines={item.get('lines')})\n"
+            )
+    remaining = report.get("remaining_flagged")
+    if isinstance(remaining, int) and remaining > 0:
+        lines.append(f"\n... and {remaining} additional flagged files.\n")
+    return "".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--limit", type=int, default=40)
+    args = parser.parse_args(argv)
+    if args.limit <= 0:
+        print("[intent_how_audit] --limit must be positive")
+        return 2
+
+    scanned = 0
+    results: list[AuditItem] = []
+    for path in iter_skills():
+        scanned += 1
+        result = score_file(path)
+        if result is not None:
+            results.append(result)
+
+    now = datetime.now(timezone.utc)
+    day = now.strftime("%Y-%m-%d")
+    report = build_report(results, scanned, now, args.limit)
+    markdown = render_markdown(report, day, min(args.limit, 25))
+    json_path = DIAG / f"intent_how_audit_{day}.json"
+    markdown_path = DIAG / f"intent_how_audit_{day}.md"
+    atomic_write_json(json_path, report)
+    atomic_write_json(DIAG / "intent_how_audit_latest.json", report)
+    atomic_write_text(markdown_path, markdown)
+    atomic_write_text(DIAG / "intent_how_audit_latest.md", markdown)
     if args.json:
         print(json.dumps(report, indent=2))
     else:
-        print(f"flagged={len(flagged)} report={md}")
+        print(f"flagged={report['flagged']} report={markdown_path}")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

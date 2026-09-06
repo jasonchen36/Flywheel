@@ -809,11 +809,14 @@ def _reflect_llm(
         "- No markdown headers or bullets\n"
         "Reply with ONLY the bullet text."
     )
-    raw = call_llm(
-        prompt,
-        max_tokens=220,
-        system="You write ACE playbook bullets. Specific, actionable, no fluff.",
-    )
+    try:
+        raw = call_llm(
+            prompt,
+            max_tokens=220,
+            system="You write ACE playbook bullets. Specific, actionable, no fluff.",
+        )
+    except Exception:
+        return None
     if not raw:
         return None
     line = raw.strip().splitlines()[0].strip().lstrip("-• ").strip()
@@ -886,13 +889,17 @@ def self_test() -> int:
     return 0 if fails == 0 else 1
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ACE Reflector")
     ap.add_argument("--self-test", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="score lessons on disk")
     ap.add_argument("--llm", action="store_true", help="allow LLM for residual weak rules")
     ap.add_argument("--max", type=int, default=30)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+
+    if args.max <= 0:
+        print("[ace_reflector] --max must be positive")
+        return 2
 
     if args.self_test:
         return self_test()
@@ -908,7 +915,11 @@ def main() -> int:
     rows = []
     for p in sorted(lessons_dir.glob("lesson_autogen_*.md"))[: args.max * 3]:
         pattern = p.name.removeprefix("lesson_autogen_").removesuffix(".md")
-        text = p.read_text(errors="replace")
+        try:
+            text = p.read_text(errors="replace")
+        except OSError as exc:
+            print(f"[ace_reflector] unreadable lesson {p.name}: {exc}")
+            continue
         fields = extract_structured_fields(text)
         if is_weak_rule(fields["rule"]):
             weak_n += 1
@@ -937,5 +948,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
