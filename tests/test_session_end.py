@@ -210,3 +210,49 @@ def test_session_end_missing_learning_directory_writes_failed_summary(tmp_path: 
     assert summary["stage_failed"] == 1
     assert summary["failed_stages"] == ["learning_directory"]
     assert list(log_dir.glob("*.tmp.*")) == []
+
+
+@pytest.mark.parametrize(
+    ("failed_script", "expected_invoked", "expected_skipped"),
+    [
+        ("held_out_suite.py", {"agent_rollouts.py"}, {"self_harness.py", "consolidate_memory.py"}),
+        ("agent_rollouts.py", {"held_out_suite.py"}, {"self_harness.py", "consolidate_memory.py"}),
+        ("self_harness.py", {"held_out_suite.py", "agent_rollouts.py", "self_harness.py"}, {"consolidate_memory.py"}),
+    ],
+)
+def test_session_end_skips_mutations_after_validation_failure(
+    tmp_path: Path,
+    failed_script: str,
+    expected_invoked: set[str],
+    expected_skipped: set[str],
+) -> None:
+    harness = tmp_path / "harness"
+    learning = harness / "MEMORY" / "LEARNING"
+    learning.mkdir(parents=True)
+    trace = tmp_path / "trace.txt"
+    env = {
+        **os.environ,
+        "HARNESS_HOME": str(harness),
+        "HARNESS_PYTHON": str(_make_fake_python(tmp_path)),
+        "TRACE_FILE": str(trace),
+        "FAIL_SCRIPT": failed_script,
+    }
+    result = subprocess.run(
+        ["bash", str(SESSION_END)], env=env, text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    log_dir = learning / "DIAGNOSTICS" / "session-end"
+    summary_path = log_dir / "latest.json"
+    _wait_for(summary_path, '"status": "completed_with_failures"')
+    invoked = set(trace.read_text().splitlines())
+    assert expected_invoked <= invoked
+    assert expected_skipped.isdisjoint(invoked)
+    status_rows = {
+        columns[1]: columns[2]
+        for line in (log_dir / "latest.tsv").read_text().splitlines()
+        if len(columns := line.split("\t")) == 5
+    }
+    for script in expected_skipped:
+        stage = script.removesuffix(".py")
+        assert status_rows[stage] == "skipped"
+    assert json.loads(summary_path.read_text())["stage_total"] == len(EXPECTED_STAGES)

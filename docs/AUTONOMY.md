@@ -97,23 +97,24 @@ ratings / FAILURES
     → review_queue.py --auto-drain
     → held_out_suite.py --gate     # fixture D_in + D_out (deterministic)
     → agent_rollouts.py --gate     # LLM PR-review rollouts under ACE playbook
-    → self_harness.py --apply --skip-rollouts
-    → consolidate_memory.py
+    → self_harness.py --apply      # applies ACE only when held-out + rollout acceptance pass
+    → consolidate_memory.py         # runs only after the same accepted dependency chain
     → agy-lessons-snapshot.md
 ```
 
 ### Metric gates
 
 ```bash
-# Deterministic fixtures (26 D_in + 12 D_out)
+# Deterministic fixtures (60 D_in + 27 D_out)
 python3 ~/.claude/MEMORY/LEARNING/held_out_suite.py --gate
 
 # Agent-executed PR-review rollouts (LLM + ACE playbook + rubrics)
 python3 ~/.claude/MEMORY/LEARNING/agent_rollouts.py --gate
 python3 ~/.claude/MEMORY/LEARNING/agent_rollouts.py --update-baseline
 
-# Combined Self-Harness gate
+# Combined Self-Harness gate; `--apply` rebuilds ACE only after acceptance.
 python3 ~/.claude/MEMORY/LEARNING/self_harness.py --gate
+python3 ~/.claude/MEMORY/LEARNING/self_harness.py --apply
 
 # skill_autofix HARD-BLOCKS new applies when either gate is red
 python3 ~/.claude/MEMORY/LEARNING/skill_autofix.py --apply

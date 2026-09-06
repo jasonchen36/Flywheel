@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from harness_config import load_enforcement_config
-from harness_paths import HARNESS_HOME, LEARNING, LESSONS_DIR, STATE, SIGNALS
+from harness_paths import DIAGNOSTICS, HARNESS_HOME, LEARNING, LESSONS_DIR, STATE, SIGNALS
 from state_io import load_jsonl_objects
 from state_io import try_read_json_object as load_json_object
 
@@ -473,12 +473,90 @@ def main(argv: list[str] | None = None) -> int:
     rolls_gate = rolls_gate_value if isinstance(rolls_gate_value, dict) else {}
     rolls_summary_value = rolls.get("summary")
     rolls_summary = rolls_summary_value if isinstance(rolls_summary_value, dict) else {}
+    rollout_skipped = rolls_summary.get("skipped_all") is True
     report["checks"]["gates"] = {
         "held_out_suite_gate_pass": suite_gate.get("gate_pass"),
         "held_out_accept": suite_summary.get("accept"),
         "agent_rollouts_gate_pass": rolls_gate.get("gate_pass"),
         "agent_rollouts_pass_rate": rolls_summary.get("pass_rate"),
+        "agent_rollouts_skipped_all": rollout_skipped,
+        "agent_rollouts_baseline_error": rolls_gate.get("error"),
     }
+    if (STATE / "held_out_suite_last.json").exists() and (
+        suite_gate.get("gate_pass") is False or suite_summary.get("accept") is False
+    ):
+        report["errors"].append("held-out suite last run did not pass")
+        report["ok"] = False
+    if (STATE / "agent_rollouts_last.json").exists() and not rollout_skipped and (
+        rolls_gate.get("gate_pass") is False or rolls_summary.get("accept") is False
+    ):
+        report["errors"].append("agent rollouts last run did not pass")
+        report["ok"] = False
+    if rolls_gate.get("error"):
+        report["errors"].append(f"agent rollout baseline invalid: {rolls_gate['error']}")
+        report["ok"] = False
+
+    # ACE playbook and Self-Harness observability
+    ace_path = STATE / "ace_playbook.json"
+    ace = state_object("ace_playbook.json") if ace_path.exists() else {}
+    raw_bullets = ace.get("bullets")
+    bullets = [row for row in raw_bullets if isinstance(row, dict)] \
+        if isinstance(raw_bullets, list) else []
+    invalid_bullets = len(raw_bullets) - len(bullets) if isinstance(raw_bullets, list) else 0
+    if ace_path.exists() and not isinstance(raw_bullets, list):
+        report["errors"].append("ACE playbook bullets must be a JSON list")
+        report["ok"] = False
+    if invalid_bullets:
+        report["errors"].append(f"ACE playbook contains {invalid_bullets} malformed bullets")
+        report["ok"] = False
+    active_sections = {"strategy", "pitfall", "formula"}
+    active_bullets = sum(1 for row in bullets if row.get("section") in active_sections)
+    weak_output = (ace.get("stats") or {}).get("weak_output") if isinstance(ace.get("stats"), dict) else None
+    report["checks"]["ace_playbook"] = {
+        "present": ace_path.exists(),
+        "generated_at": ace.get("generated_at"),
+        "bullet_count": len(bullets),
+        "active_bullets": active_bullets,
+        "invalid_bullets": invalid_bullets,
+        "weak_output": weak_output,
+    }
+    if isinstance(weak_output, int) and weak_output > 0:
+        report["warnings"].append(f"ACE playbook reports {weak_output} weak output bullets")
+
+    harness_latest = DIAGNOSTICS / "self_harness_latest.json"
+    harness_data, harness_error = load_json_object(harness_latest)
+    if harness_error and harness_latest.exists():
+        report["errors"].append(harness_error)
+        report["ok"] = False
+    stages_value = harness_data.get("stages")
+    harness_stages = stages_value if isinstance(stages_value, dict) else {}
+    validate_value = harness_stages.get("validate")
+    harness_validate = validate_value if isinstance(validate_value, dict) else {}
+    unreadable_value = harness_validate.get("unreadable_lessons")
+    unreadable_lessons = unreadable_value if isinstance(unreadable_value, list) else []
+    outcome_value = harness_data.get("outcome")
+    harness_outcome = outcome_value if isinstance(outcome_value, dict) else {}
+    outcome_status = harness_outcome.get("status")
+    report["checks"]["self_harness"] = {
+        "present": harness_latest.exists(),
+        "timestamp": harness_data.get("ts"),
+        "stages": sorted(str(name) for name in harness_stages),
+        "unreadable_lessons": unreadable_lessons,
+        "outcome_status": outcome_status,
+        "gate_error": harness_outcome.get("gate_error"),
+    }
+    if unreadable_lessons:
+        report["warnings"].append(
+            f"self-harness could not read {len(unreadable_lessons)} lessons: {unreadable_lessons[:5]}"
+        )
+    if outcome_status in {"rejected", "apply_failed"}:
+        report["errors"].append(
+            f"self-harness last cycle {outcome_status}: {harness_outcome.get('gate_error') or 'inspect logs'}"
+        )
+        report["ok"] = False
+    elif outcome_status not in {None, "reported", "accepted", "applied"}:
+        report["errors"].append(f"self-harness outcome status is invalid: {outcome_status}")
+        report["ok"] = False
 
     # Critical paths
     HOOKS = HARNESS_HOME / "hooks"
@@ -487,6 +565,10 @@ def main(argv: list[str] | None = None) -> int:
         "flush_graphiti_pending": LEARNING / "flush_graphiti_pending.py",
         "session_graphiti_autoseed": LEARNING / "session_graphiti_autoseed.py",
         "self_harness": LEARNING / "self_harness.py",
+        "ace_reflector": LEARNING / "ace_reflector.py",
+        "ace_playbook": LEARNING / "ace_playbook.py",
+        "agent_rollouts": LEARNING / "agent_rollouts.py",
+        "consolidate_memory": LEARNING / "consolidate_memory.py",
         "session_end": HOOKS / "harness-session-end.sh",
         "enforcement_gate": HOOKS / "EnforcementGate.hook.ts",
     }
@@ -511,6 +593,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Review queue: {report['checks']['review_queue']}")
         print(f"skill_autofix: {report['checks']['skill_autofix']}")
         print(f"Gates: {report['checks']['gates']}")
+        print(f"ACE playbook: {report['checks']['ace_playbook']}")
+        print(f"Self-Harness: {report['checks']['self_harness']}")
         print(f"Files missing: {missing or 'none'}")
         if report["warnings"]:
             print("\nWarnings:")

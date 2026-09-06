@@ -23,13 +23,15 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pat
     signals = learning / "SIGNALS"
     lessons = harness / "MEMORY" / "lessons"
     hooks = harness / "hooks"
+    diagnostics = learning / "DIAGNOSTICS"
     ratings = signals / "ratings.jsonl"
-    for path in (learning, state, signals, lessons, hooks):
+    for path in (learning, state, signals, lessons, hooks, diagnostics):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(harness_healthcheck, "HARNESS_HOME", harness)
     monkeypatch.setattr(harness_healthcheck, "LEARNING", learning)
     monkeypatch.setattr(harness_healthcheck, "STATE", state)
     monkeypatch.setattr(harness_healthcheck, "SIGNALS", signals)
+    monkeypatch.setattr(harness_healthcheck, "DIAGNOSTICS", diagnostics)
     monkeypatch.setattr(harness_healthcheck, "MEM", lessons)
     monkeypatch.setattr(harness_healthcheck, "RATINGS_FILE", ratings)
     return {
@@ -39,6 +41,7 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pat
         "signals": signals,
         "lessons": lessons,
         "hooks": hooks,
+        "diagnostics": diagnostics,
         "ratings": ratings,
     }
 
@@ -49,6 +52,10 @@ def _create_critical(paths: dict[str, Path]) -> None:
         "flush_graphiti_pending.py",
         "session_graphiti_autoseed.py",
         "self_harness.py",
+        "ace_reflector.py",
+        "ace_playbook.py",
+        "agent_rollouts.py",
+        "consolidate_memory.py",
     ):
         (paths["learning"] / name).write_text("# installed\n")
     (paths["hooks"] / "harness-session-end.sh").write_text("#!/bin/sh\n")
@@ -301,6 +308,8 @@ def test_healthcheck_handles_malformed_score_rows_and_nested_gate_shapes(
         "held_out_accept": None,
         "agent_rollouts_gate_pass": None,
         "agent_rollouts_pass_rate": None,
+        "agent_rollouts_skipped_all": False,
+        "agent_rollouts_baseline_error": None,
     }
 
 
@@ -377,3 +386,111 @@ def test_healthcheck_surfaces_autofix_rollback_audit_and_quarantine_failures(
     assert any("unresolved critical edits" in error for error in report["errors"])
     assert any("audit-failed edits" in warning for warning in report["warnings"])
     assert any("quarantined 1 malformed" in warning for warning in report["warnings"])
+
+
+def test_healthcheck_reports_ace_and_self_harness_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    atomic_write_json(
+        paths["state"] / "ace_playbook.json",
+        {
+            "generated_at": "2026-09-06T00:00:00Z",
+            "stats": {"weak_output": 2},
+            "bullets": [
+                {"section": "strategy", "pattern": "good", "description": "rule"},
+                {"section": "resolved", "pattern": "old", "description": "rule"},
+            ],
+        },
+    )
+    atomic_write_json(
+        paths["diagnostics"] / "self_harness_latest.json",
+        {
+            "ts": "2026-09-06T00:00:00Z",
+            "stages": {"mine": {}, "validate": {"unreadable_lessons": ["lesson_bad.md"]}},
+        },
+    )
+    assert harness_healthcheck.main(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["checks"]["ace_playbook"]["active_bullets"] == 1
+    assert report["checks"]["ace_playbook"]["weak_output"] == 2
+    assert report["checks"]["self_harness"]["stages"] == ["mine", "validate"]
+    assert any("weak output" in warning for warning in report["warnings"])
+    assert any("could not read" in warning for warning in report["warnings"])
+
+
+def test_healthcheck_fails_on_malformed_ace_self_harness_and_gate_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    atomic_write_json(paths["state"] / "ace_playbook.json", {"bullets": ["bad", {"section": "strategy"}]})
+    (paths["diagnostics"] / "self_harness_latest.json").write_text("{")
+    atomic_write_json(
+        paths["state"] / "held_out_suite_last.json",
+        {"summary": {"accept": False}, "gate": {"gate_pass": False}},
+    )
+    atomic_write_json(
+        paths["state"] / "agent_rollouts_last.json",
+        {
+            "summary": {"accept": False, "pass_rate": 0.5, "skipped_all": False},
+            "gate": {"gate_pass": False, "error": "corrupt baseline"},
+        },
+    )
+    assert harness_healthcheck.main(["--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert any("held-out suite" in error for error in report["errors"])
+    assert any("agent rollouts" in error for error in report["errors"])
+    assert any("baseline invalid" in error for error in report["errors"])
+    assert any("malformed bullets" in error for error in report["errors"])
+    assert any("self_harness_latest.json" in error for error in report["errors"])
+
+    atomic_write_json(paths["state"] / "ace_playbook.json", {"bullets": "bad"})
+    atomic_write_json(
+        paths["state"] / "agent_rollouts_last.json",
+        {
+            "summary": {"accept": False, "pass_rate": 0.0, "skipped_all": True},
+            "gate": {"gate_pass": False},
+        },
+    )
+    atomic_write_json(
+        paths["state"] / "held_out_suite_last.json",
+        {"summary": {"accept": True}, "gate": {"gate_pass": True}},
+    )
+    atomic_write_json(paths["diagnostics"] / "self_harness_latest.json", {"stages": []})
+    assert harness_healthcheck.main(["--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    assert "ACE playbook bullets must be a JSON list" in report["errors"]
+    assert not any(error == "agent rollouts last run did not pass" for error in report["errors"])
+
+
+def test_healthcheck_surfaces_self_harness_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    latest = paths["diagnostics"] / "self_harness_latest.json"
+    atomic_write_json(
+        latest,
+        {"ts": "2026-09-06T00:00:00Z", "stages": {}, "outcome": {"status": "applied", "gate_error": None}},
+    )
+    assert harness_healthcheck.main(["--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["checks"]["self_harness"]["outcome_status"] == "applied"
+
+    for status, message in (
+        ("rejected", "held-out regression"),
+        ("apply_failed", None),
+        ("unknown", None),
+    ):
+        atomic_write_json(
+            latest,
+            {"stages": {}, "outcome": {"status": status, "gate_error": message}},
+        )
+        assert harness_healthcheck.main(["--json"]) == 1
+        report = json.loads(capsys.readouterr().out)
+        if status == "unknown":
+            assert any("outcome status is invalid" in error for error in report["errors"])
+        else:
+            assert any(f"last cycle {status}" in error for error in report["errors"])

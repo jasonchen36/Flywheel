@@ -26,7 +26,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
@@ -34,7 +33,14 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import append_jsonl, atomic_write_text, load_jsonl_objects, try_read_json_object
+from state_io import (
+    append_jsonl,
+    append_jsonl_many_unlocked,
+    atomic_write_json,
+    exclusive_lock,
+    load_jsonl_objects,
+    try_read_json_object,
+)
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -49,6 +55,7 @@ DIAG = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 ARCHIVE = HARNESS_HOME / "MEMORY/STATE/harness_candidates.jsonl"
 LESSONS_DIR = HARNESS_HOME / "MEMORY/lessons"
 LOW = 4
+CHILD_TIMEOUT_SECONDS = 300
 
 
 def now_iso() -> str:
@@ -176,23 +183,57 @@ def stage_propose(mine: dict) -> dict:
 
 # ── Stage 3: Validation (held-in + held-out + diversity) ─────────────────────
 
+def run_child(command: list[str], timeout: int = CHILD_TIMEOUT_SECONDS) -> dict[str, object]:
+    """Run one validation child with bounded, machine-readable failure semantics."""
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return {
+            "exit_code": proc.returncode,
+            "stdout_tail": (proc.stdout or "")[-2000:],
+            "stderr_tail": (proc.stderr or "")[-500:],
+            "error": None,
+        }
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        return {
+            "exit_code": 124,
+            "stdout_tail": stdout[-2000:],
+            "stderr_tail": stderr[-500:],
+            "error": f"validation timed out after {timeout}s",
+        }
+    except OSError as exc:
+        return {
+            "exit_code": 127,
+            "stdout_tail": "",
+            "stderr_tail": str(exc)[-500:],
+            "error": f"validation unavailable: {type(exc).__name__}: {exc}",
+        }
+
+
 def run_held_out_suite(gate: bool = False) -> dict:
     """Metric-driven D_in/D_out fixture suite (Self-Harness accept gate)."""
     cmd = [sys.executable, str(ROOT / "held_out_suite.py")]
     if gate:
         cmd.append("--gate")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    child = run_child(cmd)
     summary, gate_state = load_child_result(
         HARNESS_HOME / "MEMORY/STATE/held_out_suite_last.json"
     )
     return {
-        "exit_code": proc.returncode,
-        "stdout_tail": (proc.stdout or "")[-1500:],
-        "stderr_tail": (proc.stderr or "")[-500:],
+        "exit_code": child["exit_code"],
+        "stdout_tail": str(child["stdout_tail"])[-1500:],
+        "stderr_tail": child["stderr_tail"],
+        "error": child["error"],
         "summary": summary,
         "gate": gate_state,
         "suite_accept": summary.get("accept"),
-        "gate_pass": gate_state.get("gate_pass", proc.returncode == 0),
+        "gate_pass": gate_state.get("gate_pass", child["exit_code"] == 0),
     }
 
 
@@ -203,18 +244,19 @@ def run_agent_rollouts(gate: bool = False, no_llm: bool = False) -> dict:
         cmd.append("--gate")
     if no_llm:
         cmd.append("--no-llm")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    child = run_child(cmd)
     summary, gate_state = load_child_result(
         HARNESS_HOME / "MEMORY/STATE/agent_rollouts_last.json"
     )
     return {
-        "exit_code": proc.returncode,
-        "stdout_tail": (proc.stdout or "")[-2000:],
-        "stderr_tail": (proc.stderr or "")[-500:],
+        "exit_code": child["exit_code"],
+        "stdout_tail": child["stdout_tail"],
+        "stderr_tail": child["stderr_tail"],
+        "error": child["error"],
         "summary": summary,
         "gate": gate_state,
         "suite_accept": summary.get("accept"),
-        "gate_pass": gate_state.get("gate_pass", proc.returncode == 0),
+        "gate_pass": gate_state.get("gate_pass", child["exit_code"] == 0),
         "pass_rate": summary.get("pass_rate"),
     }
 
@@ -233,47 +275,55 @@ def stage_validate(run_suite: bool = True, run_rollouts: bool = True) -> dict:
     edits_value = ledger.get("edits")
     edits = [edit for edit in edits_value if isinstance(edit, dict)] \
         if isinstance(edits_value, list) else []
-    archived_reverts = {
-        (
-            record.get("skill"),
-            record.get("pattern"),
-            record.get("commit_after"),
-            record.get("applied"),
-        )
-        for record in load_jsonl_objects(NEG).records
-        if record.get("kind") == "skill_autofix_revert"
-    }
-    for edit in edits:
-        if edit.get("status") != "reverted":
-            continue
-        archive_key = (
-            edit.get("skill"),
-            edit.get("pattern"),
-            edit.get("commit_after"),
-            edit.get("applied"),
-        )
-        if archive_key in archived_reverts:
-            continue
-        append_jsonl(NEG, {
-            "ts": now_iso(),
-            "kind": "skill_autofix_revert",
-            "skill": edit.get("skill"),
-            "pattern": edit.get("pattern"),
-            "verdict": edit.get("verdict"),
-            "baseline_fail_rate": edit.get("baseline_fail_rate"),
-            "post_fail_rate": edit.get("post_fail_rate"),
-            "commit_after": edit.get("commit_after"),
-            "applied": edit.get("applied"),
-            "note": "preserved as negative result — do not retry same pattern until new signal",
-        })
-        archived_reverts.add(archive_key)
-        reverts_logged += 1
+    with exclusive_lock(NEG):
+        archived_reverts = {
+            (
+                record.get("skill"),
+                record.get("pattern"),
+                record.get("commit_after"),
+                record.get("applied"),
+            )
+            for record in load_jsonl_objects(NEG).records
+            if record.get("kind") == "skill_autofix_revert"
+        }
+        new_archives: list[dict[str, object]] = []
+        for edit in edits:
+            if edit.get("status") != "reverted":
+                continue
+            archive_key = (
+                edit.get("skill"),
+                edit.get("pattern"),
+                edit.get("commit_after"),
+                edit.get("applied"),
+            )
+            if archive_key in archived_reverts:
+                continue
+            new_archives.append({
+                "ts": now_iso(),
+                "kind": "skill_autofix_revert",
+                "skill": edit.get("skill"),
+                "pattern": edit.get("pattern"),
+                "verdict": edit.get("verdict"),
+                "baseline_fail_rate": edit.get("baseline_fail_rate"),
+                "post_fail_rate": edit.get("post_fail_rate"),
+                "commit_after": edit.get("commit_after"),
+                "applied": edit.get("applied"),
+                "note": "preserved as negative result — do not retry same pattern until new signal",
+            })
+            archived_reverts.add(archive_key)
+        append_jsonl_many_unlocked(NEG, new_archives)
+        reverts_logged = len(new_archives)
 
     # diversity: near-duplicate active lesson rules (Lil'Log: diversity collapse risk)
     rules: list[tuple[str, str]] = []
+    unreadable_lessons: list[str] = []
     if LESSONS_DIR.exists():
         for p in sorted(LESSONS_DIR.glob("lesson_autogen_*.md")):
-            text = p.read_text(errors="replace")
+            try:
+                text = p.read_text(errors="replace")
+            except OSError:
+                unreadable_lessons.append(p.name)
+                continue
             parts = text.split("---", 2)
             body = (parts[2] if len(parts) >= 3 else text).lstrip("\n")
             rule = next((ln.strip() for ln in body.splitlines()
@@ -322,6 +372,7 @@ def stage_validate(run_suite: bool = True, run_rollouts: bool = True) -> dict:
         "resolved_n": len(resolved),
         "skill_reverts_logged": reverts_logged,
         "near_duplicate_lessons": near_dupes[:20],
+        "unreadable_lessons": unreadable_lessons,
         "held_out_suite": {
             "d_in_rate": (suite.get("summary") or {}).get("d_in", {}).get("pass_rate"),
             "d_out_rate": (suite.get("summary") or {}).get("d_out", {}).get("pass_rate"),
@@ -353,11 +404,72 @@ def stage_validate(run_suite: bool = True, run_rollouts: bool = True) -> dict:
 
 # ── Orchestrate ───────────────────────────────────────────────────────────────
 
-def run_ace_playbook() -> None:
-    subprocess.run(
-        [sys.executable, str(ROOT / "ace_playbook.py")],
-        check=False,
-    )
+def validation_gate_failure(validate: dict) -> str | None:
+    held_out = validate.get("held_out_suite")
+    if not isinstance(held_out, dict):
+        return "held_out_suite result is missing"
+    if (
+        held_out.get("exit_code", 1) != 0
+        or held_out.get("suite_accept") is not True
+        or held_out.get("gate_pass") is False
+    ):
+        return "held_out_suite regression or fixture mismatch"
+
+    rollouts = validate.get("agent_rollouts")
+    if not isinstance(rollouts, dict):
+        return "agent_rollouts result is missing"
+    if rollouts.get("skipped_all"):
+        return None
+    raw_rate = rollouts.get("pass_rate")
+    if isinstance(raw_rate, bool) or not isinstance(raw_rate, (str, int, float)):
+        return "agent_rollouts pass rate is invalid"
+    try:
+        rollout_rate = float(raw_rate)
+    except (OverflowError, ValueError):
+        return "agent_rollouts pass rate is invalid"
+    if not 0.0 <= rollout_rate <= 1.0:
+        return "agent_rollouts pass rate is invalid"
+    if (
+        rollouts.get("exit_code", 1) != 0
+        or rollouts.get("suite_accept") is not True
+        or rollout_rate < 0.75
+        or rollouts.get("gate_pass") is False
+    ):
+        return "agent_rollouts regression or below floor"
+    return None
+
+
+def run_ace_playbook() -> bool:
+    child = run_child([sys.executable, str(ROOT / "ace_playbook.py")])
+    if child["exit_code"] != 0:
+        print(f"[self_harness] ACE rebuild failed: {child['error'] or child['stderr_tail']}")
+        return False
+    return True
+
+
+def persist_cycle_report(
+    report: dict,
+    mine: dict | None,
+    propose: dict | None,
+    validate: dict | None,
+    outcome: dict[str, object],
+) -> Path:
+    report["outcome"] = outcome
+    day = datetime.now().strftime("%Y-%m-%d")
+    output = DIAG / f"self_harness_{day}.json"
+    atomic_write_json(output, report)
+    atomic_write_json(DIAG / "self_harness_latest.json", report)
+    append_jsonl(ARCHIVE, {
+        "ts": now_iso(),
+        "kind": "self_harness_cycle",
+        "status": outcome.get("status"),
+        "gate_error": outcome.get("gate_error"),
+        "mine_top": (mine or {}).get("top_patterns", [])[:5],
+        "proposal_n": (propose or {}).get("proposal_n"),
+        "regressed": (validate or {}).get("regressed"),
+        "suite_accept": ((validate or {}).get("held_out_suite") or {}).get("suite_accept"),
+    })
+    return output
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -369,6 +481,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--skip-rollouts", action="store_true",
                     help="do not re-run agent_rollouts (use last result; session-end sets this)")
     args = ap.parse_args(argv)
+    if (args.apply or args.gate) and args.stage not in ("validate", "all"):
+        print("[self_harness] --apply/--gate require --stage validate or all")
+        return 2
 
     report: dict = {
         "ts": now_iso(),
@@ -409,86 +524,31 @@ def main(argv: list[str] | None = None) -> int:
               f"d_in={ar.get('d_in')} d_out={ar.get('d_out')}")
         print(f"  policy: {validate['accept_policy'][:160]}...")
 
-    day = datetime.now().strftime("%Y-%m-%d")
-    out = DIAG / f"self_harness_{day}.json"
-    atomic_write_text(out, json.dumps(report, indent=2, default=str) + "\n")
-    append_jsonl(ARCHIVE, {
-        "ts": now_iso(),
-        "kind": "self_harness_cycle",
-        "mine_top": (mine or {}).get("top_patterns", [])[:5],
-        "proposal_n": (propose or {}).get("proposal_n"),
-        "regressed": (validate or {}).get("regressed"),
-        "suite_accept": ((validate or {}).get("held_out_suite") or {}).get("suite_accept"),
-    })
-    print(f"[self_harness] report → {out}")
+    outcome: dict[str, object] = {"status": "reported", "gate_error": None}
+    if args.gate or args.apply:
+        assert validate is not None
+        gate_error = validation_gate_failure(validate)
+        if gate_error:
+            outcome = {"status": "rejected", "gate_error": gate_error}
+            out = persist_cycle_report(report, mine, propose, validate, outcome)
+            print(f"[self_harness] report → {out}")
+            print(f"[self_harness] GATE FAIL — {gate_error}")
+            return 1
+        outcome["status"] = "accepted"
+        if args.gate:
+            print("[self_harness] GATE PASS (fixtures + agent rollouts)")
 
     if args.apply:
         print("[self_harness] rebuilding ACE playbook...")
-        run_ace_playbook()
+        if not run_ace_playbook():
+            outcome["status"] = "apply_failed"
+            out = persist_cycle_report(report, mine, propose, validate, outcome)
+            print(f"[self_harness] report → {out}")
+            return 1
+        outcome["status"] = "applied"
 
-    if args.gate:
-        suite = (
-            (validate or {}).get("held_out_suite")
-            if validate is not None
-            else run_held_out_suite(gate=True)
-        ) or {}
-        if (
-            suite.get("exit_code", 1) != 0
-            or suite.get("suite_accept") is not True
-            or suite.get("gate_pass") is False
-        ):
-            print("[self_harness] GATE FAIL — held_out_suite regression or fixture mismatch")
-            return 1
-        if args.skip_rollouts:
-            # Use last agent_rollouts result (session-end already ran them)
-            last_path = HARNESS_HOME / "MEMORY/STATE/agent_rollouts_last.json"
-            if last_path.exists():
-                summary, gate_state = load_child_result(last_path)
-                if not summary:
-                    print("[self_harness] GATE FAIL — existing rollouts result is unreadable")
-                    return 1
-                try:
-                    rate = float(summary.get("pass_rate") or 0.0)
-                except (TypeError, ValueError) as exc:
-                    print(f"[self_harness] GATE FAIL — invalid rollout pass rate: {exc}")
-                    return 1
-                if summary.get("skipped_all"):
-                    print("[self_harness] GATE PASS (fixtures; rollouts skipped/no-llm)")
-                    return 0
-                if rate < 0.75:
-                    print(f"[self_harness] GATE FAIL — last agent_rollouts "
-                          f"pass_rate={rate:.1%} < 75%")
-                    return 1
-                if gate_state.get("has_baseline") and gate_state.get("gate_pass") is False:
-                    print("[self_harness] GATE FAIL — last agent_rollouts baseline regression")
-                    return 1
-                print(f"[self_harness] GATE PASS (fixtures + last rollouts "
-                      f"pass_rate={rate:.1%})")
-                return 0
-            print("[self_harness] GATE PASS (fixtures only; no rollouts last)")
-            return 0
-        rolls = (
-            (validate or {}).get("agent_rollouts")
-            if validate is not None
-            else run_agent_rollouts(gate=True, no_llm=False)
-        ) or {}
-        if rolls.get("skipped_all"):
-            print("[self_harness] GATE PASS (fixtures; rollouts skipped/unavailable)")
-            return 0
-        try:
-            rollout_rate = float(rolls.get("pass_rate") or 0.0)
-        except (TypeError, ValueError):
-            rollout_rate = 0.0
-        if (
-            rolls.get("exit_code", 1) != 0
-            or rolls.get("suite_accept") is not True
-            or rollout_rate < 0.75
-            or rolls.get("gate_pass") is False
-        ):
-            print("[self_harness] GATE FAIL — agent_rollouts regression or below floor")
-            print(rolls.get("stdout_tail", "")[-800:])
-            return 1
-        print("[self_harness] GATE PASS (fixtures + agent_rollouts)")
+    out = persist_cycle_report(report, mine, propose, validate, outcome)
+    print(f"[self_harness] report → {out}")
     return 0
 
 
