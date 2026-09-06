@@ -61,7 +61,7 @@ def test_resolve_stall_and_reactivate_are_dry_run_or_persisted(
 
     saved: list[dict] = []
     monkeypatch.setattr(skill_burnin, "skill_sessions", fake_sessions)
-    monkeypatch.setattr(skill_burnin, "save_ledger", lambda value: saved.append(value))
+    monkeypatch.setattr(skill_burnin, "save_ledger", lambda value, **_kwargs: saved.append(value))
     changes = skill_burnin.resolve_stall(ledger, [], "2026-09-05", False)
     assert len(changes) == 2
     assert ledger["edits"][0]["status"] == "active"
@@ -132,7 +132,7 @@ def test_main_resolve_stall_reports_dry_run(
 ):
     ledger = {"edits": []}
     _patch_main(tmp_path, monkeypatch, ledger, {})
-    monkeypatch.setattr(skill_burnin, "resolve_stall", lambda *_args: ["STALL /one"])
+    monkeypatch.setattr(skill_burnin, "resolve_stall", lambda *_args, **_kwargs: ["STALL /one"])
     assert skill_burnin.main(["--resolve-stall"]) == 0
     output = capsys.readouterr().out
     assert "STALL /one" in output
@@ -148,7 +148,7 @@ def test_main_provisional_dry_run_does_not_persist(
         ]
     }
     _patch_main(tmp_path, monkeypatch, ledger, {"working": (1, 4)})
-    monkeypatch.setattr(skill_burnin, "save_ledger", lambda _value: pytest.fail("dry run must not save"))
+    monkeypatch.setattr(skill_burnin, "save_ledger", lambda _value, **_kwargs: pytest.fail("dry run must not save"))
     assert skill_burnin.main(["--provisional-measure"]) == 0
     output = capsys.readouterr().out
     assert "re-run with --apply" in output
@@ -167,7 +167,7 @@ def test_main_provisional_apply_confirms_holds_skips_and_writes_diagnostics(
     }
     _patch_main(tmp_path, monkeypatch, ledger, {"working": (1, 5), "holding": (0, 4), "short": (0, 2)})
     saved: list[dict] = []
-    monkeypatch.setattr(skill_burnin, "save_ledger", lambda value: saved.append(value))
+    monkeypatch.setattr(skill_burnin, "save_ledger", lambda value, **_kwargs: saved.append(value))
     assert skill_burnin.main(["--provisional-measure", "--apply"]) == 0
     output = capsys.readouterr().out
     assert "PROVISIONAL-CONFIRM /working" in output
@@ -178,3 +178,66 @@ def test_main_provisional_apply_confirms_holds_skips_and_writes_diagnostics(
     assert saved == [ledger]
     report = next((tmp_path / "diagnostics").glob("skill_burnin_*.md")).read_text()
     assert "PROVISIONAL-CONFIRM" in report and "HOLD" in report
+
+
+def test_resolve_stall_ignores_quiet_stalled_edit_and_empty_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = {
+        "edits": [
+            {
+                "skill": "quiet",
+                "pattern": "proof",
+                "status": "stalled",
+                "applied": "2026-01-01",
+            }
+        ]
+    }
+    monkeypatch.setattr(skill_burnin, "skill_sessions", lambda *_args, **_kwargs: [])
+    saved: list[dict] = []
+    monkeypatch.setattr(skill_burnin, "save_ledger", lambda value, **_kwargs: saved.append(value))
+    assert skill_burnin.resolve_stall(ledger, [], "2026-09-06", True) == []
+    assert saved == []
+
+
+def test_main_empty_stall_and_combined_status_provisional_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ledger = {
+        "edits": [
+            {
+                "skill": "working",
+                "pattern": "proof",
+                "status": "active",
+                "applied": "2026-01-01",
+                "baseline_fail_rate": 0.8,
+            }
+        ]
+    }
+    _patch_main(tmp_path, monkeypatch, ledger, {"working": (1, 4)})
+    monkeypatch.setattr(skill_burnin, "resolve_stall", lambda *_args, **_kwargs: [])
+    assert skill_burnin.main(["--resolve-stall"]) == 0
+    assert "no stalled edits" in capsys.readouterr().out
+
+    assert skill_burnin.main(["--status", "--provisional-measure"]) == 0
+    output = capsys.readouterr().out
+    assert "Skill burn-in status" in output
+    assert "re-run with --apply" in output
+
+
+def test_main_apply_reports_ledger_lock_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ledger = {"edits": []}
+    _patch_main(tmp_path, monkeypatch, ledger, {})
+    monkeypatch.setattr(
+        skill_burnin,
+        "exclusive_lock",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError("busy")),
+    )
+    assert skill_burnin.main(["--apply"]) == 1
+    assert "ledger unavailable" in capsys.readouterr().err

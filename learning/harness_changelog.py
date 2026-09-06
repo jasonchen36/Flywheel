@@ -216,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         [
             "## How to undo",
             "",
-            "- Skill auto-fixes: `python3 skill_autofix.py --revert <edit_id>`",
+            "- Skill auto-fixes: inspect `STATE/skill_autofix_ledger.json` and restore the recorded `commit_before` from `STATE/skillfix_repo`.",
             "- Review approvals: `python3 review_queue.py --reject <pattern> --source base --reason \"noise\"`",
             "- Full restore: inspect the git snapshots described in `docs/AUTONOMY.md`.",
             "",

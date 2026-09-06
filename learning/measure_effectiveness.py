@@ -55,6 +55,7 @@ from self_improve import (  # noqa: E402
     classify_entry,
     RATINGS_FILE,
     MEMORY_DIR,
+    rating_entry_key,
     DIAGNOSTICS,
 )
 from evals import load_objective_fails, covered_patterns  # noqa: E402
@@ -223,11 +224,15 @@ def objective_failure_rate(
 ) -> float:
     if not pool:
         return 0.0
-    hits = sum(
-        1
-        for entry in pool
-        if failures.get(getattr(entry, "timestamp", ""), {}).get(pattern)
-    )
+    hits = 0
+    for entry in pool:
+        exact_key = rating_entry_key(entry)
+        pattern_results = failures.get(exact_key)
+        if pattern_results is None:
+            timestamp = getattr(entry, "timestamp", "")
+            pattern_results = failures.get(timestamp, {}) if isinstance(timestamp, str) else {}
+        if pattern_results.get(pattern):
+            hits += 1
     return hits / len(pool)
 
 
@@ -365,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     for e in entries:
         e.patterns = classify_entry(e)
 
-    # Objective signal: reproducible binary-eval fails, joined on entry timestamp.
+    # Objective signal: reproducible binary-eval fails, joined on exact rating turn.
     obj_fails = load_objective_fails()
     covered = covered_patterns()
     # Judge signal: semantic verdicts on the judge's OWN labeled turns (mostly unrated

@@ -25,7 +25,7 @@ from skill_autofix import (
 )
 from measure_effectiveness import verdict_for
 from self_improve import load_all_ratings, RATINGS_FILE
-from state_io import atomic_write_text
+from state_io import atomic_write_text, exclusive_lock
 
 STALL_DAYS = 14  # active edit older than this with zero post-apply traffic → park
 
@@ -54,7 +54,9 @@ def safe_rate(value: object) -> float:
         return 0.0
 
 
-def resolve_stall(ledger: dict, entries: list, today: str, apply: bool) -> list[str]:
+def resolve_stall(
+    ledger: dict, entries: list, today: str, apply: bool, *, ledger_locked: bool = False
+) -> list[str]:
     """Park active edits whose skill has had no rated sessions since apply.
 
     2026-08: 5 edits sat active 27d with post_n=0 because the rating sensor
@@ -99,24 +101,19 @@ def resolve_stall(ledger: dict, entries: list, today: str, apply: bool) -> list[
                 ed["reactivated_at"] = today
                 ed.pop("stalled_reason", None)
     if apply and changes:
-        save_ledger(ledger)
+        save_ledger(ledger, locked=ledger_locked)
     return changes
 
 
-def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--status", action="store_true")
-    ap.add_argument("--provisional-measure", action="store_true")
-    ap.add_argument("--resolve-stall", action="store_true")
-    ap.add_argument("--apply", action="store_true")
-    ap.add_argument("--json", action="store_true")
-    args = ap.parse_args(argv)
+def _run(args: argparse.Namespace, *, ledger_locked: bool) -> int:
     ledger = load_ledger()
     entries = load_all_ratings(RATINGS_FILE)
     today = datetime.now().strftime("%Y-%m-%d")
 
     if args.resolve_stall:
-        changes = resolve_stall(ledger, entries, today, args.apply)
+        changes = resolve_stall(
+            ledger, entries, today, args.apply, ledger_locked=ledger_locked
+        )
         print("\n".join(changes) or "no stalled edits")
         if changes and not args.apply:
             print("[dry] re-run with --apply to write stall/reactivate transitions")
@@ -138,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             "provisional_verdict": prov_v,
             "needs_live_sessions": len(post) < MIN_AFTER,
         })
-    if args.status or not (args.provisional_measure):
+    if args.status or not args.provisional_measure:
         if args.json:
             print(json.dumps({"active": rows}, indent=2))
         else:
@@ -164,8 +161,6 @@ def main(argv: list[str] | None = None) -> int:
             ed["provisional_verdict"] = v
             ed["provisional_measured"] = today
             ed["provisional_n"] = len(all_s)
-            # Only auto-confirm on strong improvement; never provisional-revert
-            # (historical data can understate post-guardrail gains).
             if v in ("working", "improving", "resolved") and rate < baseline_rate - 0.005:
                 ed["status"] = "confirmed"
                 ed["confirmed"] = today
@@ -179,18 +174,36 @@ def main(argv: list[str] | None = None) -> int:
                     f"HOLD /{ed['skill']} — provisional {v} "
                     f"(all_rate={rate:.2f} base={baseline_rate:.2f}); need live post sessions"
                 )
-        save_ledger(ledger)
+        save_ledger(ledger, locked=ledger_locked)
         atomic_write_text(
             DIAG_DIR / f"skill_burnin_{today}.md",
             f"# Skill burn-in {today}\n\n" + "\n".join(f"- {c}" for c in changes) + "\n"
         )
         print("\n".join(changes) or "no changes")
         print(f"ledger → {LEDGER_FILE}")
-    elif args.provisional_measure:
+    else:
         print("[dry] re-run with --apply to write provisional confirms")
         for r in rows:
             print(f"  would evaluate /{r['skill']} → {r['provisional_verdict']}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--status", action="store_true")
+    ap.add_argument("--provisional-measure", action="store_true")
+    ap.add_argument("--resolve-stall", action="store_true")
+    ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    args = ap.parse_args(argv)
+    if args.apply:
+        try:
+            with exclusive_lock(LEDGER_FILE):
+                return _run(args, ledger_locked=True)
+        except TimeoutError as exc:
+            print(f"skill burn-in ledger unavailable: {exc}", file=sys.stderr)
+            return 1
+    return _run(args, ledger_locked=False)
 
 if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

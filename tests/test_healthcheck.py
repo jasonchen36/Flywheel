@@ -347,3 +347,33 @@ def test_healthcheck_human_output_includes_clean_outcome_judge_state(
     assert "Outcome judge:" in output
     assert "'pending': 0" in output
     assert "'quarantined': 0" in output
+
+
+def test_healthcheck_surfaces_autofix_rollback_audit_and_quarantine_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    atomic_write_json(
+        paths["state"] / "skill_autofix_ledger.json",
+        {
+            "edits": [
+                {"skill": "deploy", "pattern": "tool_misuse", "status": "rollback-failed"},
+                {"skill": "review", "pattern": "missing_proof", "status": "invalid"},
+                {"skill": "test", "pattern": "blind_retry", "status": "reverted-audit-failed"},
+                {"skill": "build", "pattern": "missing_dependency", "status": "apply-audit-failed"},
+            ],
+            "invalid_edits": [{"skill": "bad"}],
+        },
+    )
+
+    assert harness_healthcheck.main(["--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    check = report["checks"]["skill_autofix"]
+    assert check["quarantined_edits"] == 1
+    assert len(check["failed_edits"]) == 4
+    assert any("unresolved critical edits" in error for error in report["errors"])
+    assert any("audit-failed edits" in warning for warning in report["warnings"])
+    assert any("quarantined 1 malformed" in warning for warning in report["warnings"])

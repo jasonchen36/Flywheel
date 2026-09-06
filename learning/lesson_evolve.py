@@ -49,9 +49,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
+import hashlib
 import re
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,9 +59,10 @@ from review_store import enqueue_pending, load_reviews
 from state_io import (
     append_jsonl_many,
     atomic_write_text,
-    exclusive_lock,
+    exclusive_locks,
     load_jsonl_objects,
     rewrite_jsonl_unlocked,
+    try_read_json_object,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -78,25 +78,36 @@ BACKUP_DIR = HARNESS_HOME / "MEMORY/STATE/lesson_evolve_backups"
 N_VARIANTS = 2
 MUTATION_COOLDOWN_DAYS = 7
 ELIGIBLE_VERDICTS = {"flat", "regressed"}
+MAX_VARIANTS = 10
+MAX_VARIANT_CHARS = 1200
+_PATTERN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
-def load_scores() -> dict:
-    if not SCORES_JSON.exists():
+def valid_pattern(pattern: object) -> bool:
+    return isinstance(pattern, str) and bool(_PATTERN_RE.fullmatch(pattern))
+
+
+def load_scores() -> dict[str, dict]:
+    data, _error = try_read_json_object(SCORES_JSON)
+    scores = data.get("scores")
+    if not isinstance(scores, dict):
         return {}
-    try:
-        return json.loads(SCORES_JSON.read_text()).get("scores", {})
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return {
+        pattern: score
+        for pattern, score in scores.items()
+        if valid_pattern(pattern) and isinstance(score, dict)
+    }
 
 
-def escalation_verdict(s: dict) -> str:
-    """Mirror measure_effectiveness.escalation_verdict: obj tier if eval-covered,
-    else judge tier if judged, else subjective."""
-    if s.get("eval_covered"):
-        return s.get("obj_verdict", "pending")
-    if s.get("judge_covered"):
-        return s.get("judge_verdict", "pending")
-    return s.get("verdict", "pending")
+def escalation_verdict(score: dict) -> str:
+    """Return the highest-priority well-formed verdict from persisted score state."""
+    if score.get("eval_covered") is True:
+        value = score.get("obj_verdict")
+    elif score.get("judge_covered") is True:
+        value = score.get("judge_verdict")
+    else:
+        value = score.get("verdict")
+    return value if isinstance(value, str) else ""
 
 
 def load_variants() -> list[dict]:
@@ -107,29 +118,68 @@ def append_variants(records: list[dict]) -> None:
     append_jsonl_many(VARIANTS_FILE, records)
 
 
+def _date_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 def last_mutation_date(variants: list[dict], pattern: str) -> str | None:
-    dates = [v["proposed_at"] for v in variants if v.get("pattern") == pattern]
+    dates = [
+        normalized
+        for variant in variants
+        if variant.get("pattern") == pattern
+        and (normalized := _date_value(variant.get("proposed_at"))) is not None
+    ]
     return max(dates) if dates else None
 
 
 def days_since(date_str: str, today: str) -> int:
-    try:
-        return (datetime.strptime(today, "%Y-%m-%d") - datetime.strptime(date_str, "%Y-%m-%d")).days
-    except ValueError:
+    start = _date_value(date_str)
+    end = _date_value(today)
+    if start is None or end is None:
         return 9999
+    return (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days
 
 
 def current_rule(pattern: str) -> str | None:
-    path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
-    if not path.exists():
+    if not valid_pattern(pattern):
         return None
-    txt = path.read_text()
+    path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
+    if not path.is_file():
+        return None
+    try:
+        txt = path.read_text()
+    except OSError:
+        return None
     parts = txt.split("---", 2)
     body = (parts[2] if len(parts) >= 3 else txt).lstrip("\n")
     return body.split("\n\n", 1)[0].strip()
 
 
+def normalize_variant_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.strip().split())[:MAX_VARIANT_CHARS]
+    return text or None
+
+
+def valid_generated_variant(text: str) -> bool:
+    lowered = text.lower()
+    return all(label in lowered for label in ("rule:", "rationale:", "applicability:"))
+
+
+def proposal_id(pattern: str, proposed_at: str, variant_id: int, text: str) -> str:
+    payload = f"{pattern}\0{proposed_at}\0{variant_id}\0{text}".encode()
+    return hashlib.sha256(payload).hexdigest()[:20]
+
+
 def generate_variants(pattern: str, failing_rule: str, n: int) -> list[str]:
+    if not valid_pattern(pattern) or not 1 <= n <= MAX_VARIANTS:
+        return []
     prompt = (
         f"An AI coding assistant keeps failing the pattern '{pattern.replace('_', ' ')}' "
         f"DESPITE having this standing instruction already in its context:\n\n"
@@ -148,20 +198,36 @@ def generate_variants(pattern: str, failing_rule: str, n: int) -> list[str]:
     raw = call_llm(prompt, max_tokens=400)
     if not raw:
         return []
-    lines = [l.strip().lstrip("-*0123456789. ") for l in raw.strip().splitlines() if l.strip()]
-    return lines[:n]
+    candidates: list[str] = []
+    for line in raw.strip().splitlines():
+        candidate = normalize_variant_text(line.strip().lstrip("-*0123456789. "))
+        if (
+            candidate is not None
+            and valid_generated_variant(candidate)
+            and candidate not in candidates
+        ):
+            candidates.append(candidate)
+        if len(candidates) >= n:
+            break
+    return candidates
 
 
 def load_review_queue() -> list[dict]:
     return load_reviews(REVIEW_FILE)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-llm", action="store_true", help="report eligible patterns only")
     ap.add_argument("--n-variants", type=int, default=N_VARIANTS)
     ap.add_argument("--cooldown-days", type=int, default=MUTATION_COOLDOWN_DAYS)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if not 1 <= args.n_variants <= MAX_VARIANTS:
+        print(f"[lesson_evolve] n-variants must be between 1 and {MAX_VARIANTS}")
+        return 2
+    if args.cooldown_days < 0:
+        print("[lesson_evolve] cooldown-days must be non-negative")
+        return 2
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     scores = load_scores()
@@ -193,14 +259,28 @@ def main() -> int:
         return 0
 
     review_records = load_review_queue()
-    already_queued = {r["pattern"] for r in review_records
-                       if r.get("status") == "pending" and r.get("source") == "lesson_evolve"}
+    already_queued = {
+        review_pattern
+        for record in review_records
+        if record.get("status") == "pending"
+        and record.get("source") == "lesson_evolve"
+        and isinstance((review_pattern := record.get("pattern")), str)
+        and valid_pattern(review_pattern)
+    }
+    known_proposals = {
+        value
+        for record in variants
+        if isinstance((value := record.get("proposal_id")), str) and value
+    }
 
     new_variant_records = []
     pending_rows: list[dict] = []
     for pattern, verdict, rule in eligible:
         lines.append(f"## {pattern} (verdict: {verdict})")
         lines.append(f"Current (failing) instruction: {rule}")
+        if pattern in already_queued:
+            lines.append("(existing lesson-evolution review is still pending — no new batch generated)\n")
+            continue
         if args.no_llm:
             lines.append("(--no-llm: skipped candidate generation)\n")
             continue
@@ -208,16 +288,26 @@ def main() -> int:
         if not candidates:
             lines.append("(LLM unavailable or empty reply — skipped this run)\n")
             continue
-        for i, c in enumerate(candidates):
-            new_variant_records.append({
-                "pattern": pattern, "variant_id": i, "text": c,
-                "failing_rule": rule, "proposed_at": today, "status": "proposed",
-            })
-            lines.append(f"  [{i}] {c}")
+        batch_id = hashlib.sha256(
+            f"{pattern}\0{today}\0".encode() + "\0".join(candidates).encode()
+        ).hexdigest()[:20]
+        for i, candidate in enumerate(candidates):
+            candidate_id = proposal_id(pattern, today, i, candidate)
+            if candidate_id not in known_proposals:
+                new_variant_records.append({
+                    "proposal_id": candidate_id,
+                    "batch_id": batch_id,
+                    "pattern": pattern,
+                    "variant_id": i,
+                    "text": candidate,
+                    "failing_rule": rule,
+                    "proposed_at": today,
+                    "status": "proposed",
+                })
+                known_proposals.add(candidate_id)
+            lines.append(f"  [{i}] {candidate}")
         lines.append("")
 
-        if pattern in already_queued:
-            continue
         candidate_lines = "\n".join(f"  [{i}] {c}" for i, c in enumerate(candidates))
         pending_rows.append({
             "pattern": pattern, "detected_at": today, "delta": None,
@@ -227,7 +317,7 @@ def main() -> int:
             "note": f"Lesson for '{pattern}' verdict={verdict} (didn't improve). "
                     f"Candidate rephrasings:\n{candidate_lines}\n"
                     f"Approve to apply variant 0 (or `--variant N` for another), "
-                    f"which backs up the current lesson and resets its effectiveness window.",
+                    f"which backs up the current lesson while preserving its effectiveness window.",
         })
 
     report = "\n".join(lines) + "\n"
@@ -243,65 +333,152 @@ def main() -> int:
     return 0
 
 
-def apply_variant(pattern: str, variant_id: int, today: str) -> bool:
-    """Apply one proposed lesson variant and update its ledger transactionally."""
-    with exclusive_lock(VARIANTS_FILE):
-        variants = load_variants()
-        match = next((v for v in variants
-                     if v["pattern"] == pattern and v["variant_id"] == variant_id
-                     and v["status"] == "proposed"), None)
-        if not match:
-            # Re-approving after a later regression is a legitimate retry.
-            match = next((v for v in reversed(variants)
-                         if v["pattern"] == pattern and v["variant_id"] == variant_id), None)
-        if not match:
-            print(f"WARNING: no variant {variant_id} found for pattern '{pattern}'. No change made.")
-            return False
+def _backup_path(pattern: str, today: str, selected_id: str) -> Path:
+    base = BACKUP_DIR / f"{pattern}_{today}_{selected_id[:12]}.md"
+    if not base.exists():
+        return base
+    suffix = 2
+    while True:
+        candidate = base.with_name(f"{base.stem}.{suffix}{base.suffix}")
+        if not candidate.exists():
+            return candidate
+        suffix += 1
 
-        path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
-        if not path.exists():
+
+def apply_variant(pattern: str, variant_id: int, today: str) -> bool:
+    """Apply the latest exact proposed variant and commit its ledger transition."""
+    if (
+        not valid_pattern(pattern)
+        or isinstance(variant_id, bool)
+        or not isinstance(variant_id, int)
+        or variant_id < 0
+        or _date_value(today) is None
+    ):
+        print("WARNING: invalid lesson variant request. No change made.")
+        return False
+
+    path = MEMORY_DIR / f"lesson_autogen_{pattern}.md"
+    with exclusive_locks([VARIANTS_FILE, path]):
+        variants = load_variants()
+        proposed_indices = [
+            index
+            for index, candidate in enumerate(variants)
+            if candidate.get("pattern") == pattern
+            and candidate.get("status") == "proposed"
+            and normalize_variant_text(candidate.get("text")) is not None
+        ]
+        if not proposed_indices:
+            print(f"WARNING: no proposed variant {variant_id} found for pattern '{pattern}'. No change made.")
+            return False
+        latest = variants[proposed_indices[-1]]
+        latest_batch_value = latest.get("batch_id")
+        latest_batch = (
+            latest_batch_value
+            if isinstance(latest_batch_value, str) and latest_batch_value
+            else f"legacy:{latest.get('proposed_at', '')}"
+        )
+        match_index: int | None = None
+        selected_text: str | None = None
+        for index in reversed(proposed_indices):
+            candidate = variants[index]
+            candidate_id = candidate.get("variant_id")
+            batch_value = candidate.get("batch_id")
+            candidate_batch = (
+                batch_value
+                if isinstance(batch_value, str) and batch_value
+                else f"legacy:{candidate.get('proposed_at', '')}"
+            )
+            if (
+                candidate_batch == latest_batch
+                and isinstance(candidate_id, int)
+                and not isinstance(candidate_id, bool)
+                and candidate_id == variant_id
+                and (selected_text := normalize_variant_text(candidate.get("text"))) is not None
+            ):
+                match_index = index
+                break
+        if match_index is None or selected_text is None:
+            print(f"WARNING: no proposed variant {variant_id} found for pattern '{pattern}'. No change made.")
+            return False
+        if not path.is_file():
             print(f"WARNING: lesson_autogen_{pattern}.md not found. No change made.")
             return False
 
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        backup_path = BACKUP_DIR / f"{pattern}_{today}.md"
-        shutil.copy2(path, backup_path)
-
-        txt = path.read_text()
-        parts = txt.split("---", 2)
+        try:
+            original = path.read_text()
+        except OSError as exc:
+            print(f"WARNING: could not read {path.name}: {exc}. No change made.")
+            return False
+        parts = original.split("---", 2)
         if len(parts) < 3:
             print(f"WARNING: {path.name} missing frontmatter structure. No change made.")
             return False
         frontmatter, body = parts[1], parts[2].lstrip("\n")
+        if not re.search(r"^\s*pattern:\s*\S+", frontmatter, re.M):
+            print(f"WARNING: {path.name} missing pattern metadata. No change made.")
+            return False
         body_parts = body.split("\n\n", 1)
         rest = body_parts[1] if len(body_parts) > 1 else ""
-        new_body = match["text"].strip() + "\n\n" + rest
+        new_body = selected_text + "\n\n" + rest
 
-        # Preserve first_seen (measurement anchor). Only bump last_updated.
         if not re.search(r"^\s*first_seen:\s*\d{4}-\d{2}-\d{2}", frontmatter, re.M):
-            m_old = re.search(r"last_updated:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
-            first_seen = m_old.group(1) if m_old else today
+            old_date = re.search(r"last_updated:\s*(\d{4}-\d{2}-\d{2})", frontmatter)
+            first_seen = old_date.group(1) if old_date else today
             frontmatter = re.sub(
                 r"(pattern:\s*\S+\n)",
                 rf"\1  first_seen: {first_seen}\n",
                 frontmatter,
                 count=1,
             )
-        frontmatter = re.sub(
-            r"(last_updated:\s*)\d{4}-\d{2}-\d{2}", rf"\g<1>{today}", frontmatter
-        )
-        atomic_write_text(path, "---" + frontmatter + "---\n\n" + new_body)
+        if re.search(r"last_updated:\s*\d{4}-\d{2}-\d{2}", frontmatter):
+            frontmatter = re.sub(
+                r"(last_updated:\s*)\d{4}-\d{2}-\d{2}",
+                rf"\g<1>{today}",
+                frontmatter,
+            )
+        else:
+            frontmatter = frontmatter.rstrip() + f"\nlast_updated: {today}\n"
+        updated = "---" + frontmatter + "---\n\n" + new_body
 
-        for variant in variants:
-            if variant["pattern"] == pattern and variant["variant_id"] == variant_id:
-                variant["status"] = "applied"
-        rewrite_jsonl_unlocked(VARIANTS_FILE, variants)
+        selected = variants[match_index]
+        selected_id = selected.get("proposal_id")
+        if not isinstance(selected_id, str) or not selected_id:
+            proposed_at = _date_value(selected.get("proposed_at")) or today
+            selected_id = proposal_id(pattern, proposed_at, variant_id, selected_text)
+            selected["proposal_id"] = selected_id
+        backup_path = _backup_path(pattern, today, selected_id)
+        try:
+            atomic_write_text(backup_path, original)
+            atomic_write_text(path, updated)
+            selected["status"] = "applied"
+            selected["applied_at"] = today
+            selected["backup"] = str(backup_path)
+            for index in proposed_indices:
+                if index == match_index:
+                    continue
+                sibling = variants[index]
+                sibling["status"] = "superseded"
+                sibling["superseded_at"] = today
+            rewrite_jsonl_unlocked(VARIANTS_FILE, variants)
+        except (OSError, TimeoutError) as exc:
+            try:
+                atomic_write_text(path, original)
+            except OSError as restore_exc:
+                print(
+                    f"CRITICAL: variant ledger commit failed and lesson restore failed: "
+                    f"{restore_exc}"
+                )
+                return False
+            print(f"WARNING: variant apply failed; lesson restored: {exc}")
+            return False
 
-    print(f"Applied variant {variant_id} to lesson_autogen_{pattern}.md "
-          f"(backup: {backup_path}). last_updated bumped to {today}; "
-          f"first_seen preserved so effectiveness window does not reset.")
+    print(
+        f"Applied variant {variant_id} to lesson_autogen_{pattern}.md "
+        f"(backup: {backup_path}). last_updated bumped to {today}; "
+        f"first_seen preserved so effectiveness window does not reset."
+    )
     return True
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
