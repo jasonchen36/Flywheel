@@ -51,7 +51,7 @@ from state_io import atomic_write_text, load_jsonl_objects, rewrite_jsonl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from self_improve import (  # noqa: E402
-    load_all_ratings, classify_entry, classify_other_llm,
+    load_all_ratings, classify_entry, classify_other_llm, rating_entry_key,
     RATINGS_FILE, DIAGNOSTICS,
 )
 
@@ -114,26 +114,38 @@ def main(argv: list[str] | None = None) -> int:
         label_map = classify_other_llm(other_entries)
         print(f"[pattern_promotion] LLM labeled {len(label_map)}/{len(other_entries)}")
 
-    # Merge into the durable ledger, keyed by session_id (idempotent — same entry always
-    # gets its latest label, never double-counted).
+    # Merge into the durable ledger by exact turn identity. Legacy session-only rows
+    # remain readable, while new rows cannot collide when one session has multiple turns.
     ledger = load_ledger()
-    by_session = {
-        str(record["session_id"]): record
-        for record in ledger
-        if isinstance(record.get("session_id"), str) and record["session_id"]
+    by_turn: dict[str, dict] = {}
+    for record in ledger:
+        turn_key = record.get("turn_key")
+        session_id = record.get("session_id")
+        key = turn_key if isinstance(turn_key, str) and turn_key else session_id
+        if isinstance(key, str) and key:
+            by_turn[key] = record
+    id_to_entry = {
+        key: entry
+        for entry in other_entries
+        if (key := rating_entry_key(entry))
     }
-    id_to_entry = {e.session_id: e for e in other_entries}
-    for sid, label in label_map.items():
-        if not isinstance(sid, str) or not isinstance(label, str) or not valid_pattern(label):
+    for turn_key, label in label_map.items():
+        if not isinstance(turn_key, str) or not isinstance(label, str) or not valid_pattern(label):
             continue
-        representative = id_to_entry.get(sid)
-        by_session[sid] = {
-            "session_id": sid, "label": label, "labeled_at": today,
-            "sentiment_summary": representative.sentiment_summary if representative else "",
-            "rating": representative.rating if representative else None,
-            "status": by_session.get(sid, {}).get("status", "pending"),
+        representative = id_to_entry.get(turn_key)
+        if representative is None:
+            continue
+        by_turn[turn_key] = {
+            "turn_key": turn_key,
+            "session_id": getattr(representative, "session_id", ""),
+            "timestamp": getattr(representative, "timestamp", ""),
+            "label": label,
+            "labeled_at": today,
+            "sentiment_summary": getattr(representative, "sentiment_summary", ""),
+            "rating": getattr(representative, "rating", None),
+            "status": by_turn.get(turn_key, {}).get("status", "pending"),
         }
-    new_ledger = list(by_session.values())
+    new_ledger = list(by_turn.values())
 
     if not args.dry_run:
         write_ledger(new_ledger)
@@ -150,8 +162,18 @@ def main(argv: list[str] | None = None) -> int:
         ):
             by_label[record_label].append(rec)
 
-    candidates = {label: recs for label, recs in by_label.items()
-                 if len(recs) >= args.min_occurrences}
+    def distinct_session_count(records: list[dict]) -> int:
+        return len({
+            str(record.get("session_id") or record.get("turn_key") or "")
+            for record in records
+            if record.get("session_id") or record.get("turn_key")
+        })
+
+    candidates = {
+        label: recs
+        for label, recs in by_label.items()
+        if distinct_session_count(recs) >= args.min_occurrences
+    }
 
     lines = [f"# Pattern Promotion — {today}", "",
              f"Ledger size: {len(new_ledger)} | Unique pending labels: {len(by_label)} "
@@ -159,12 +181,17 @@ def main(argv: list[str] | None = None) -> int:
     if candidates:
         lines += ["| label | occurrences | avg rating | suggested keywords |",
                   "|---|---|---|---|"]
-        for label, recs in sorted(candidates.items(), key=lambda kv: -len(kv[1])):
+        for label, recs in sorted(
+            candidates.items(),
+            key=lambda item: -distinct_session_count(item[1]),
+        ):
             ratings = [r["rating"] for r in recs if isinstance(r.get("rating"), (int, float))]
             avg = sum(ratings) / max(1, len(ratings))
             summaries = [str(r.get("sentiment_summary") or "") for r in recs]
             kws = suggest_keywords(label, summaries)
-            lines.append(f"| {label} | {len(recs)} | {avg:.1f} | {', '.join(kws)} |")
+            lines.append(
+                f"| {label} | {distinct_session_count(recs)} | {avg:.1f} | {', '.join(kws)} |"
+            )
     else:
         lines.append("No labels have crossed the promotion threshold yet.")
     report = "\n".join(lines) + "\n"
@@ -186,13 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         kws = suggest_keywords(label, summaries)
         ratings = [r["rating"] for r in recs if isinstance(r.get("rating"), (int, float))]
         avg = sum(ratings) / max(1, len(ratings))
+        occurrence_count = distinct_session_count(recs)
         pending_rows.append({
             "pattern": label, "detected_at": today, "delta": None,
-            "after_n": len(recs), "obj_verdict": "n/a", "judge_verdict": "n/a",
+            "after_n": occurrence_count, "obj_verdict": "n/a", "judge_verdict": "n/a",
             "status": "pending", "reviewed_at": None, "reviewer": None,
             "source": "pattern_promotion",
             "note": f"New pattern '{label}' discovered by LLM classifier across "
-                    f"{len(recs)} previously-unclassified sessions (avg rating {avg:.1f}). "
+                    f"{occurrence_count} previously-unclassified sessions (avg rating {avg:.1f}). "
                     f"Suggested keywords for PATTERN_KEYWORDS: {kws}. "
                     f"Approve to append to self_improve.py's taxonomy.",
         })

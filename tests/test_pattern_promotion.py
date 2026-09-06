@@ -119,7 +119,7 @@ def test_main_accumulates_valid_sessions_and_queues_candidate_once(
     output = capsys.readouterr().out
     assert "Queued 1 new pattern" in output
     ledger = load_jsonl_objects(paths["ledger"]).records
-    assert {row.get("session_id") for row in ledger} == {"promoted", "one", "two", "unknown"}
+    assert {row.get("session_id") for row in ledger} == {"promoted", "one", "two"}
     reviews = load_reviews(paths["review"])
     assert [row["pattern"] for row in reviews] == ["missing_proof"]
     assert "avg rating 3.0" in reviews[0]["note"]
@@ -191,3 +191,43 @@ def test_taxonomy_idempotency_ignores_pattern_text_outside_registry(
     assert pattern_promotion.promote_to_taxonomy("new_pattern", ["proof"]) is True
     registry = paths["taxonomy"].read_text().split("}\n", 1)[0]
     assert '"new_pattern": ["proof"]' in registry
+
+
+def test_exact_turn_ledger_does_not_inflate_distinct_session_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    paths = _configure(tmp_path, monkeypatch)
+    entries = [
+        SimpleNamespace(
+            session_id="same-session",
+            timestamp="2026-09-06T12:00:00Z",
+            rating=2,
+            sentiment_summary="Missing deployment proof",
+            patterns=[],
+        ),
+        SimpleNamespace(
+            session_id="same-session",
+            timestamp="2026-09-06T12:01:00Z",
+            rating=3,
+            sentiment_summary="Missing command proof",
+            patterns=[],
+        ),
+    ]
+    monkeypatch.setattr(pattern_promotion, "load_all_ratings", lambda _path: entries)
+    monkeypatch.setattr(pattern_promotion, "classify_entry", lambda _entry: ["other"])
+    monkeypatch.setattr(
+        pattern_promotion,
+        "classify_other_llm",
+        lambda _entries: {
+            "same-session|2026-09-06T12:00:00Z": "missing_proof",
+            "same-session|2026-09-06T12:01:00Z": "missing_proof",
+        },
+    )
+
+    assert pattern_promotion.main(["--min-occurrences", "2"]) == 0
+    ledger = load_jsonl_objects(paths["ledger"]).records
+    assert {row["turn_key"] for row in ledger} == {
+        "same-session|2026-09-06T12:00:00Z",
+        "same-session|2026-09-06T12:01:00Z",
+    }
+    assert not paths["review"].exists()
