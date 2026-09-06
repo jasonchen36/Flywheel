@@ -79,6 +79,6 @@ def test_all_skipped_gate_persists_diagnostics_but_not_history_or_baseline(
     assert payload["results"][0]["errors"] == ["--no-llm"]
     assert not (state / "baseline.json").exists()
     assert not (tmp_path / "signals" / "history.jsonl").exists()
-    report = diagnostics / "agent_rollouts_2026-09-05.md"
-    assert report.exists()
-    assert "SKIP `example`" in report.read_text()
+    reports = list(diagnostics.glob("agent_rollouts_*.md"))
+    assert len(reports) == 1
+    assert "SKIP `example`" in reports[0].read_text()

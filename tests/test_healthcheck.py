@@ -302,3 +302,48 @@ def test_healthcheck_handles_malformed_score_rows_and_nested_gate_shapes(
         "agent_rollouts_gate_pass": None,
         "agent_rollouts_pass_rate": None,
     }
+
+
+def test_healthcheck_reports_outcome_judge_backlog_quarantine_and_corruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    pending = paths["signals"] / "pending_judge.jsonl"
+    for index in range(51):
+        append_jsonl(
+            pending,
+            {
+                "timestamp": f"2026-09-06T12:00:{index:02d}Z",
+                "session_id": f"session-{index}",
+                "response": "substantive response",
+            },
+        )
+    append_jsonl(
+        paths["signals"] / "invalid_judge.jsonl",
+        {"turn_id": "bad", "reason": "missing response", "record": {}},
+    )
+    (paths["signals"] / "judge_results.jsonl").write_text("not-json\n")
+
+    assert harness_healthcheck.main(["--json"]) == 1
+    report = json.loads(capsys.readouterr().out)
+    judge = report["checks"]["outcome_judge"]
+    assert judge["pending"] == 51
+    assert judge["results"] == 0
+    assert judge["quarantined"] == 1
+    assert judge["result_invalid_lines"] == [1]
+    assert any("outcome judge state has malformed" in error for error in report["errors"])
+    assert any("quarantined outcome-judge" in warning for warning in report["warnings"])
+    assert any("51 outcome-judge turns still pending" in warning for warning in report["warnings"])
+
+
+def test_healthcheck_human_output_includes_clean_outcome_judge_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    paths = _configure(tmp_path, monkeypatch)
+    _seed_healthy(paths, monkeypatch)
+    assert harness_healthcheck.main([]) == 0
+    output = capsys.readouterr().out
+    assert "Outcome judge:" in output
+    assert "'pending': 0" in output
+    assert "'quarantined': 0" in output

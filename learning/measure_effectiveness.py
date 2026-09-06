@@ -41,7 +41,12 @@ from typing import Any
 
 from harness_paths import BUNGRAPH_DB, HARNESS_HOME
 from review_store import enqueue_pending, expire_pending, load_reviews
-from state_io import append_jsonl, atomic_write_json, atomic_write_text
+from state_io import (
+    append_jsonl_many,
+    atomic_write_json,
+    atomic_write_text,
+    try_read_json_object,
+)
 
 # Reuse the EXACT classifier the generator uses — no attribution drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -65,6 +70,7 @@ MIN_AFTER = 5        # need this many post-lesson sessions before judging
 # Cap pending lifetime: if the measurement window still has after_n < min_after
 # after this many calendar days, mark stale-pending (force merge or traffic).
 STALE_PENDING_DAYS = 14
+REVIEW_EXPIRE_DAYS = 14
 # Verdicts that are real hill-climb signals (injectable / escalatable).
 # pending / stale-pending / no-* are measurement states, not outcomes.
 REAL_VERDICTS = frozenset({
@@ -166,7 +172,7 @@ def days_between(start: str, end: str) -> int:
     try:
         return (datetime.strptime(end, "%Y-%m-%d") -
                 datetime.strptime(start, "%Y-%m-%d")).days
-    except ValueError:
+    except (TypeError, ValueError):
         return 999
 
 
@@ -197,12 +203,163 @@ def is_real_verdict(v: str) -> bool:
     return v in REAL_VERDICTS
 
 
-def main() -> int:
+def rating_failure_rate(pool: list[Any], pattern: str) -> tuple[float, int]:
+    if not pool:
+        return 0.0, 0
+    hits = sum(
+        1
+        for entry in pool
+        if isinstance(getattr(entry, "rating", None), int)
+        and entry.rating <= LOW
+        and pattern in getattr(entry, "patterns", [])
+    )
+    return hits / len(pool), hits
+
+
+def objective_failure_rate(
+    pool: list[Any],
+    failures: dict[str, dict[str, bool]],
+    pattern: str,
+) -> float:
+    if not pool:
+        return 0.0
+    hits = sum(
+        1
+        for entry in pool
+        if failures.get(getattr(entry, "timestamp", ""), {}).get(pattern)
+    )
+    return hits / len(pool)
+
+
+def judge_failure_rate(
+    failures: dict[str, dict[str, bool]],
+    pattern: str,
+    lesson_date: str,
+    *,
+    before: bool,
+) -> tuple[float, int]:
+    rows = [
+        patterns[pattern]
+        for timestamp, patterns in failures.items()
+        if pattern in patterns and ((entry_date(timestamp) < lesson_date) == before)
+    ]
+    if not rows:
+        return 0.0, 0
+    return sum(1 for failed in rows if failed) / len(rows), len(rows)
+
+
+def load_prior_scores(path: Path = SCORES_JSON) -> dict[str, dict[str, Any]]:
+    state, _ = try_read_json_object(path)
+    scores = state.get("scores")
+    if not isinstance(scores, dict):
+        return {}
+    return {
+        pattern: value
+        for pattern, value in scores.items()
+        if isinstance(pattern, str) and isinstance(value, dict)
+    }
+
+
+def safe_nonnegative_int(value: object) -> int:
+    if not isinstance(value, (str, int, float)):
+        return 0
+    try:
+        return max(0, int(value))
+    except (OverflowError, ValueError):
+        return 0
+
+
+def escalation_verdict(result: dict[str, Any], min_after: int) -> str:
+    if result.get("eval_covered"):
+        objective = str(result.get("obj_verdict") or "no-eval")
+        subjective = str(result.get("verdict") or "pending")
+        if (
+            subjective in {"flat", "regressed"}
+            and safe_nonnegative_int(result.get("after_n")) >= min_after
+            and result.get("pattern") in ENFORCEABLE_PATTERNS
+            and objective not in {"regressed", "flat"}
+        ):
+            return subjective
+        return objective
+    if result.get("judge_covered"):
+        return str(result.get("judge_verdict") or "no-judge")
+    return str(result.get("verdict") or "pending")
+
+
+def active_review_patterns(
+    records: list[dict[str, Any]],
+    today: str,
+    max_age_days: int = REVIEW_EXPIRE_DAYS,
+) -> set[str]:
+    active: set[str] = set()
+    for record in records:
+        status = record.get("status")
+        pattern = record.get("pattern")
+        if not isinstance(pattern, str):
+            continue
+        if status in {"processing", "action_failed"}:
+            active.add(pattern)
+            continue
+        if status != "pending":
+            continue
+        detected = record.get("detected_at", "")
+        try:
+            days_old = (
+                datetime.strptime(today, "%Y-%m-%d")
+                - datetime.strptime(detected, "%Y-%m-%d")
+            ).days
+        except (TypeError, ValueError):
+            days_old = max_age_days + 1
+        if days_old <= max_age_days:
+            active.add(pattern)
+    return active
+
+
+def escalation_driver(
+    result: dict[str, Any],
+    verdict: str,
+) -> tuple[str, float, int]:
+    if verdict == result.get("verdict") and verdict in {"flat", "regressed"}:
+        return "subj", float(result.get("delta") or 0.0), safe_nonnegative_int(result.get("after_n"))
+    if result.get("eval_covered") and verdict == result.get("obj_verdict"):
+        return "obj", float(result.get("obj_delta") or 0.0), safe_nonnegative_int(result.get("after_n"))
+    if result.get("judge_covered") and verdict == result.get("judge_verdict"):
+        return "jdg", float(result.get("judge_delta") or 0.0), safe_nonnegative_int(result.get("judge_after_n"))
+    if result.get("eval_covered"):
+        return "obj", float(result.get("obj_delta") or 0.0), safe_nonnegative_int(result.get("after_n"))
+    return "subj", float(result.get("delta") or 0.0), safe_nonnegative_int(result.get("after_n"))
+
+
+def notify(message: str) -> bool:
+    try:
+        subprocess.Popen(
+            [
+                "curl", "-s", "-X", "POST", "http://localhost:8888/notify",
+                "-H", "Content-Type: application/json",
+                "-d", json.dumps({
+                    "message": message,
+                    "voice_id": "fTtv3eikoepIosk8dTZ5",
+                    "voice_enabled": True,
+                }),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        print(f"[effectiveness] notification unavailable: {exc}")
+        return False
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--min-after", type=int, default=MIN_AFTER)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     min_after = args.min_after
+    if min_after <= 0:
+        print("[effectiveness] min-after must be positive")
+        return 2
 
     entries = load_all_ratings(RATINGS_FILE)
     for e in entries:
@@ -227,46 +384,48 @@ def main() -> int:
     for pattern, meta in sorted(lessons.items()):
         ldate = meta.get("baseline_date") or ""
         if not ldate:
-            results.append({"pattern": pattern, "verdict": "undated",
-                            "before_rate": 0.0, "after_rate": 0.0, "delta": 0.0,
-                            "before_n": 0, "after_n": 0, "lesson_date": "",
-                            "baseline_date": "", "content_version": "",
-                            "days_open": 0, "injectable": False})
+            results.append({
+                "pattern": pattern,
+                "verdict": "undated",
+                "before_rate": 0.0,
+                "after_rate": 0.0,
+                "delta": 0.0,
+                "before_n": 0,
+                "after_n": 0,
+                "lesson_date": "",
+                "baseline_date": "",
+                "content_version": meta.get("content_version") or "",
+                "last_updated": meta.get("last_updated") or "",
+                "days_open": 0,
+                "injectable": False,
+                "eval_covered": False,
+                "obj_before": 0.0,
+                "obj_after": 0.0,
+                "obj_delta": 0.0,
+                "obj_verdict": "no-eval",
+                "judge_covered": False,
+                "judge_before": 0.0,
+                "judge_after": 0.0,
+                "judge_delta": 0.0,
+                "judge_verdict": "no-judge",
+                "judge_after_n": 0,
+            })
             continue
 
         before = [e for e in entries if entry_date(e.timestamp) < ldate]
         after = [e for e in entries if entry_date(e.timestamp) >= ldate]
         days_open = days_between(ldate, today)
 
-        def rate(pool, current_pattern=pattern):
-            if not pool:
-                return 0.0, 0
-            hits = sum(
-                1
-                for entry in pool
-                if entry.rating <= LOW and current_pattern in entry.patterns
-            )
-            return hits / len(pool), hits
-
-        before_rate, _ = rate(before)
-        after_rate, _ = rate(after)
+        before_rate, _ = rating_failure_rate(before, pattern)
+        after_rate, _ = rating_failure_rate(after, pattern)
         v = verdict_for(before_rate, after_rate, len(after), min_after,
                         days_open=days_open)
 
         # Objective verdict from binary evals — reproducible, when the pattern has coverage.
         is_covered = pattern in covered
         if is_covered:
-            def obj_rate(pool, current_pattern=pattern):
-                if not pool:
-                    return 0.0
-                hits = sum(
-                    1
-                    for entry in pool
-                    if obj_fails.get(entry.timestamp, {}).get(current_pattern)
-                )
-                return hits / len(pool)
-            obj_before = obj_rate(before)
-            obj_after = obj_rate(after)
+            obj_before = objective_failure_rate(before, obj_fails, pattern)
+            obj_after = objective_failure_rate(after, obj_fails, pattern)
             obj_v = verdict_for(obj_before, obj_after, len(after), min_after,
                                 days_open=days_open)
         else:
@@ -278,22 +437,12 @@ def main() -> int:
         # mostly unrated, so they are NOT in `entries`; never join on entry timestamps).
         is_judged = pattern in judged
         if is_judged:
-            def jdg_rate(
-                before_side: bool,
-                current_pattern=pattern,
-                lesson_date=ldate,
-            ):
-                rows = [
-                    patterns[current_pattern]
-                    for timestamp, patterns in judge_fails.items()
-                    if current_pattern in patterns
-                    and ((entry_date(timestamp) < lesson_date) == before_side)
-                ]
-                if not rows:
-                    return 0.0, 0
-                return sum(1 for f in rows if f) / len(rows), len(rows)
-            jdg_before, _ = jdg_rate(True)
-            jdg_after, jdg_after_n = jdg_rate(False)
+            jdg_before, _ = judge_failure_rate(
+                judge_fails, pattern, ldate, before=True
+            )
+            jdg_after, jdg_after_n = judge_failure_rate(
+                judge_fails, pattern, ldate, before=False
+            )
             jdg_v = verdict_for(jdg_before, jdg_after, jdg_after_n, min_after,
                                 days_open=days_open)
         else:
@@ -337,72 +486,31 @@ def main() -> int:
     # Dual-signal (2026-07): if subjective is regressed/flat with enough post data BUT
     # objective looks fine, still escalate for ENFORCEABLE patterns. Real failure mode:
     # evals measured path-as-artifact while users still rated 3/10 for premature "done".
-    def escalation_verdict(r: dict[str, Any]) -> str:
-        if r["eval_covered"]:
-            obj = r["obj_verdict"]
-            subj = r["verdict"]
-            if (
-                subj in ("flat", "regressed")
-                and r.get("after_n", 0) >= min_after
-                and r["pattern"] in ENFORCEABLE_PATTERNS
-                and obj not in ("regressed", "flat")
-            ):
-                # Prefer the worse signal when human ratings disagree with weak evals
-                return subj
-            return obj
-        if r["judge_covered"]:
-            return r["judge_verdict"]
-        return r["verdict"]
-
     # Only escalate patterns with a REAL outcome (flat/regressed) — never the
     # pending / stale-pending sea. Escalation drives EnforcementGate + injection.
     escalate = [
         r for r in results
-        if escalation_verdict(r) in ("flat", "regressed")
-        and is_real_verdict(escalation_verdict(r))
+        if escalation_verdict(r, min_after) in ("flat", "regressed")
+        and is_real_verdict(escalation_verdict(r, min_after))
     ]
     stale_pending = [r for r in results if r["verdict"] == "stale-pending"]
 
     # Load prior scores to identify first-time regressions (file may not exist yet).
-    _prior_scores: dict = {}
-    if SCORES_JSON.exists():
-        try:
-            _prior_scores = json.loads(SCORES_JSON.read_text()).get("scores", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+    prior_scores = load_prior_scores(SCORES_JSON)
 
     # Pending, processing, and failed-action reviews remain gated. Overdue pending
     # rows are treated as expired for this decision and committed transactionally below.
-    REVIEW_EXPIRE_DAYS = 14
-    _pending_review: set[str] = set()
-    for _rec in load_reviews(REVIEW_FILE):
-        _status = _rec.get("status")
-        _pattern = _rec.get("pattern")
-        if not isinstance(_pattern, str):
-            continue
-        if _status in {"processing", "action_failed"}:
-            _pending_review.add(_pattern)
-            continue
-        if _status != "pending":
-            continue
-        _detected = _rec.get("detected_at", "")
-        try:
-            _days_old = (datetime.strptime(today, "%Y-%m-%d") -
-                         datetime.strptime(_detected, "%Y-%m-%d")).days
-        except (TypeError, ValueError):
-            _days_old = REVIEW_EXPIRE_DAYS + 1
-        if _days_old <= REVIEW_EXPIRE_DAYS:
-            _pending_review.add(_pattern)
+    _pending_review = active_review_patterns(load_reviews(REVIEW_FILE), today)
 
     # Enforceable patterns already have detectors + ALWAYS_ON/block config —
     # never gate them behind first-time human review (2026-07-09: UC kept
     # dropping out of escalate[] despite regressed + EnforcementGate ready).
     first_time_regressed = [
         r for r in escalate
-        if escalation_verdict(r) == "regressed"
+        if escalation_verdict(r, min_after) == "regressed"
         and r["pattern"] not in ENFORCEABLE_PATTERNS
         and r["pattern"] not in _pending_review
-        and _prior_scores.get(r["pattern"], {}).get("verdict") != "regressed"
+        and prior_scores.get(r["pattern"], {}).get("verdict") != "regressed"
     ]
     # Patterns still under active review (pending, not expired) stay out of escalate
     # — except enforceable (detectors already live).
@@ -418,7 +526,13 @@ def main() -> int:
     order = {"regressed": 0, "flat": 1, "improving": 2, "working": 3,
              "resolved": 4, "stale-pending": 5, "pending": 6, "no-baseline": 7,
              "no-eval": 8, "no-judge": 8, "undated": 9}
-    rows = sorted(results, key=lambda r: (order.get(escalation_verdict(r), 10), r["delta"]))
+    rows = sorted(
+        results,
+        key=lambda result: (
+            order.get(escalation_verdict(result, min_after), 10),
+            result["delta"],
+        ),
+    )
 
     # Coverage gaps: patterns recurring in low-rated sessions with no binary eval yet.
     low = [e for e in entries if e.rating <= LOW]
@@ -460,17 +574,8 @@ def main() -> int:
         for r in escalate:
             tag = "enforceable" if r["pattern"] in ENFORCEABLE_PATTERNS else "soft-only"
             # Report the signal that actually drove escalation (may be subj dual-signal)
-            ev = escalation_verdict(r)
-            if ev == r["verdict"] and r["verdict"] in ("flat", "regressed"):
-                driver, d, n = "subj", r["delta"], r["after_n"]
-            elif r["eval_covered"] and ev == r["obj_verdict"]:
-                driver, d, n = "obj", r["obj_delta"], r["after_n"]
-            elif r["judge_covered"] and ev == r["judge_verdict"]:
-                driver, d, n = "jdg", r["judge_delta"], r["judge_after_n"]
-            elif r["eval_covered"]:
-                driver, d, n = "obj", r["obj_delta"], r["after_n"]
-            else:
-                driver, d, n = "subj", r["delta"], r["after_n"]
+            ev = escalation_verdict(r, min_after)
+            driver, d, n = escalation_driver(r, ev)
             lines.append(f"- **{r['pattern']}** [{tag}] (via {driver}, Δ {d:+.3f}, "
                          f"{n} sessions since lesson)")
     review_section = first_time_regressed + under_review
@@ -531,7 +636,9 @@ def main() -> int:
 
     # Programmatically commit verdicts to bungraph.db (Point 1: Loopback)
     for r in results:
-        push_to_bungraph(r["pattern"], escalation_verdict(r), r["delta"], today)
+        push_to_bungraph(
+            r["pattern"], escalation_verdict(r, min_after), r["delta"], today
+        )
 
     # Human review queue — expire and enqueue under transactional store locks.
     auto_expired_pats = expire_pending(
@@ -561,27 +668,21 @@ def main() -> int:
     if first_time_regressed:
         msg = (f"NEW regression queued for review: "
                f"{', '.join(r['pattern'] for r in first_time_regressed)}")
-        subprocess.Popen(
-            ["curl", "-s", "-X", "POST", "http://localhost:8888/notify",
-             "-H", "Content-Type: application/json",
-             "-d", json.dumps({"message": msg, "voice_id": "fTtv3eikoepIosk8dTZ5",
-                               "voice_enabled": True})],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    known_regressed = [r["pattern"] for r in escalate if escalation_verdict(r) == "regressed"]
+        notify(msg)
+    known_regressed = [
+        result["pattern"]
+        for result in escalate
+        if escalation_verdict(result, min_after) == "regressed"
+    ]
     if known_regressed:
         msg = (f"Self-improvement: {len(known_regressed)} known regression(s) still active — "
                f"{', '.join(known_regressed)}")
-        subprocess.Popen(
-            ["curl", "-s", "-X", "POST", "http://localhost:8888/notify",
-             "-H", "Content-Type: application/json",
-             "-d", json.dumps({"message": msg, "voice_id": "fTtv3eikoepIosk8dTZ5",
-                               "voice_enabled": True})],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        notify(msg)
 
-    for result in results:
-        append_jsonl(EFFECT_LOG, {**result, "measured_at": today})
+    append_jsonl_many(
+        EFFECT_LOG,
+        [{**result, "measured_at": today} for result in results],
+    )
 
     print(f"Wrote: {DIAGNOSTICS / f'effectiveness_{today}.md'}")
     print(f"Wrote: {SCORES_JSON}")
@@ -589,5 +690,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -47,8 +48,10 @@ from harness_paths import HARNESS_HOME
 from state_io import (
     append_jsonl,
     append_jsonl_many,
+    append_jsonl_many_unlocked,
     atomic_write_text,
     exclusive_lock,
+    exclusive_locks,
     load_jsonl_objects,
     rewrite_jsonl,
     rewrite_jsonl_unlocked,
@@ -88,12 +91,24 @@ def _extract_json(raw: str) -> dict | None:
 SIGNALS_DIR   = HARNESS_HOME / "MEMORY/LEARNING/SIGNALS"
 PENDING_FILE  = SIGNALS_DIR / "pending_judge.jsonl"
 RESULTS_FILE  = SIGNALS_DIR / "judge_results.jsonl"
+INVALID_FILE  = SIGNALS_DIR / "invalid_judge.jsonl"
 DIAG_DIR      = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
 
 # ── Bounds ──────────────────────────────────────────────────────────────────────────
-MAX_PER_RUN  = int(os.environ.get("JUDGE_MAX_PER_RUN", "12"))   # turns judged per run
-QUORUM       = max(1, int(os.environ.get("JUDGE_QUORUM", "1"))) # independent passes, majority vote
-QUEUE_CAP    = 1000                                             # trim pending queue to last N
+def env_positive_int(name: str, default: int, maximum: int) -> int:
+    """Read a bounded positive integer without making imports configuration-fragile."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+    if value <= 0:
+        return default
+    return min(value, maximum)
+
+
+MAX_PER_RUN = env_positive_int("JUDGE_MAX_PER_RUN", 12, 100)
+QUORUM = env_positive_int("JUDGE_QUORUM", 1, 9)
+QUEUE_CAP = 1000
 
 # One-line definitions for the semantic patterns a regex can't catch. The judge only ever
 # evaluates GAP patterns (those WITHOUT a binary eval); this map is intersected with that set.
@@ -152,7 +167,7 @@ def drain_queue(judged_keys: set[str]) -> list[dict]:
 
 
 # ── The judge ──────────────────────────────────────────────────────────────────────────
-def _judge_once(context: str, response: str, patterns: list[str]) -> dict[str, str]:
+def _judge_once(context: str, response: str, patterns: list[str]) -> dict[str, str] | None:
     """One adversarial pass → {pattern: evidence} for patterns judged FAILED."""
     defs = "\n".join(f"- {p}: {PATTERN_DEFS.get(p, p.replace('_', ' '))}" for p in patterns)
     prompt = (
@@ -166,43 +181,49 @@ def _judge_once(context: str, response: str, patterns: list[str]) -> dict[str, s
         'or citing the proof>"}]}. List ONLY patterns that FAILED. If none, return '
         '{"failures": []}. Use the exact pattern ids above.'
     )
-    raw = call_llm(prompt, max_tokens=400)
-    if not raw:
-        return {}
+    try:
+        raw = call_llm(prompt, max_tokens=400)
+    except Exception as exc:
+        print(f"[judge] provider unavailable: {type(exc).__name__}: {exc}")
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
     obj = _extract_json(raw) if "{" in raw else None
+    if obj is None or not isinstance(obj.get("failures"), list):
+        return None
     out: dict[str, str] = {}
-    if obj and isinstance(obj.get("failures"), list):
-        valid = set(patterns)
-        for f in obj["failures"]:
-            if isinstance(f, dict) and f.get("pattern") in valid:
-                out[f["pattern"]] = str(f.get("evidence", ""))[:160]
+    valid = set(patterns)
+    for failure in obj["failures"]:
+        if not isinstance(failure, dict):
+            return None
+        pattern = failure.get("pattern")
+        evidence = failure.get("evidence")
+        if pattern not in valid or not isinstance(evidence, str) or not evidence.strip():
+            return None
+        out[pattern] = evidence.strip()[:160]
     return out
 
 
 def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
     """Quorum-vote a single turn. Returns {pattern: {failed, evidence}} for ALL judged
     patterns (full matrix: not-flagged = passed), or None if the LLM was unavailable."""
-    response = (turn.get("response") or "").strip()
-    if not response:
+    raw_response = turn.get("response")
+    if not isinstance(raw_response, str) or not raw_response.strip():
         return None
-    context = turn.get("context") or ""
+    response = raw_response.strip()
+    raw_context = turn.get("context")
+    context = raw_context if isinstance(raw_context, str) else ""
+    if not patterns:
+        return {}
     votes: Counter = Counter()
     evidence: dict[str, str] = {}
-    got_any = False
     for _ in range(QUORUM):
-        res = _judge_once(context, response, patterns)
-        if res:
-            got_any = True
-        for pat, ev in res.items():
-            votes[pat] += 1
-            evidence.setdefault(pat, ev)
-    # A single empty pass can legitimately mean "no failures"; only treat as unavailable
-    # when EVERY pass returned nothing AND we never got a parseable response.
-    if QUORUM and not got_any and votes == Counter():
-        # Could be genuine clean pass or LLM down — distinguish via a probe pass result.
-        probe = call_llm("Reply with the single token OK.", max_tokens=5)
-        if not probe:
+        result = _judge_once(context, response, patterns)
+        if result is None:
             return None
+        for pattern, cited_evidence in result.items():
+            votes[pattern] += 1
+            evidence.setdefault(pattern, cited_evidence)
     threshold = (QUORUM // 2) + 1
     matrix = {}
     for p in patterns:
@@ -212,8 +233,94 @@ def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────────
-def turn_key(t: dict) -> str:
-    return f"{t.get('timestamp','')}|{t.get('session_id','')}"
+def turn_key(turn: dict) -> str:
+    explicit = turn.get("turn_id")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    identity = {
+        "timestamp": str(turn.get("timestamp") or ""),
+        "session_id": str(turn.get("session_id") or ""),
+        "response": str(turn.get("response") or ""),
+        "context": str(turn.get("context") or ""),
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:20]
+    return f"{identity['timestamp']}|{identity['session_id']}|{digest}"
+
+
+def invalid_turn_reason(turn: dict) -> str | None:
+    response = turn.get("response")
+    if not isinstance(response, str) or not response.strip():
+        return "missing response"
+    timestamp = turn.get("timestamp")
+    session_id = turn.get("session_id")
+    if not isinstance(timestamp, str) or not timestamp:
+        return "missing timestamp"
+    if not isinstance(session_id, str) or not session_id:
+        return "missing session_id"
+    return None
+
+
+def result_key(record: dict) -> tuple[str, str]:
+    turn_id = record.get("turn_id")
+    if not isinstance(turn_id, str) or not turn_id:
+        turn_id = turn_key(record)
+    pattern = record.get("pattern")
+    return turn_id, pattern if isinstance(pattern, str) else ""
+
+
+def legacy_result_key(record: dict) -> tuple[str, str, str]:
+    timestamp = record.get("timestamp")
+    session_id = record.get("session_id")
+    pattern = record.get("pattern")
+    return (
+        timestamp if isinstance(timestamp, str) else "",
+        session_id if isinstance(session_id, str) else "",
+        pattern if isinstance(pattern, str) else "",
+    )
+
+
+def commit_judgements(
+    rows: list[dict],
+    judged_keys: set[str],
+    invalid_rows: list[dict] | None = None,
+) -> tuple[int, int, list[dict]]:
+    """Deduplicate results/quarantine rows and drain handled turns in one transaction."""
+    invalid_rows = invalid_rows or []
+    with exclusive_locks((RESULTS_FILE, INVALID_FILE, PENDING_FILE)):
+        existing_records = load_jsonl_objects(RESULTS_FILE).records
+        seen_keys = {result_key(record) for record in existing_records}
+        legacy_keys = {
+            legacy_result_key(record)
+            for record in existing_records
+            if not isinstance(record.get("turn_id"), str) or not record.get("turn_id")
+        }
+        new_rows: list[dict] = []
+        for row in rows:
+            key = result_key(row)
+            if key in seen_keys or legacy_result_key(row) in legacy_keys:
+                continue
+            seen_keys.add(key)
+            new_rows.append(row)
+        append_jsonl_many_unlocked(RESULTS_FILE, new_rows)
+        existing_invalid = {
+            record.get("turn_id")
+            for record in load_jsonl_objects(INVALID_FILE).records
+            if isinstance(record.get("turn_id"), str)
+        }
+        new_invalid: list[dict] = []
+        for row in invalid_rows:
+            turn_id = row.get("turn_id")
+            if turn_id in existing_invalid:
+                continue
+            existing_invalid.add(turn_id)
+            new_invalid.append(row)
+        append_jsonl_many_unlocked(INVALID_FILE, new_invalid)
+        current = read_queue()
+        remaining = [turn for turn in current if turn_key(turn) not in judged_keys]
+        rewrite_jsonl_unlocked(PENDING_FILE, remaining[-QUEUE_CAP:])
+        return len(new_rows), len(new_invalid), remaining[-QUEUE_CAP:]
 
 
 def reclass_other(limit: int = 40, dry_run: bool = False) -> int:
@@ -230,7 +337,7 @@ def reclass_other(limit: int = 40, dry_run: bool = False) -> int:
         # Temporarily classify without reclass cache for discovery? Use raw keywords only
         # by checking if already reclassed.
         pats = classify_entry(e)
-        if pats == ["other"] or (len(pats) == 1 and pats[0] == "other"):
+        if pats == ["other"]:
             others.append(e)
     others = others[-limit:]  # most recent other lows
     print(f"[reclass-other] candidates={len(others)} (limit={limit})")
@@ -292,7 +399,7 @@ def reclass_other(limit: int = 40, dry_run: bool = False) -> int:
     return labeled
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Subagent outcome judge (semantic gap signal)")
     ap.add_argument("--no-llm", action="store_true", help="no-op (judge needs ADC)")
     ap.add_argument("--dry-run", action="store_true", help="judge + print, write nothing, keep queue")
@@ -300,14 +407,17 @@ def main() -> int:
     ap.add_argument("--reclass-other", action="store_true",
                     help="re-label low-rated 'other' ratings into known patterns (Gemini)")
     ap.add_argument("--limit", type=int, default=40, help="max other entries for --reclass-other")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.limit < 0:
+        print("[judge] limit must be non-negative")
+        return 2
 
     today = datetime.now().strftime("%Y-%m-%d")
     queue = read_queue()
 
     if args.status:
-        n_results = sum(1 for _ in RESULTS_FILE.open()) if RESULTS_FILE.exists() else 0
-        n_reclass = sum(1 for _ in OTHER_RECLASS_FILE.open()) if OTHER_RECLASS_FILE.exists() else 0
+        n_results = len(load_jsonl_objects(RESULTS_FILE).records)
+        n_reclass = len(load_jsonl_objects(OTHER_RECLASS_FILE).records)
         print(f"pending queue: {len(queue)} | judge_results rows: {n_results} | "
               f"other_reclass: {n_reclass} | gap patterns: {gap_patterns()} | quorum: {QUORUM}")
         return 0
@@ -334,17 +444,30 @@ def main() -> int:
     patterns = gap_patterns()
     batch = queue[:MAX_PER_RUN]
     rows: list[dict] = []
+    invalid_rows: list[dict] = []
     judged_keys: set[str] = set()
     llm_down = False
 
     for turn in batch:
+        key = turn_key(turn)
+        invalid_reason = invalid_turn_reason(turn)
+        if invalid_reason is not None:
+            judged_keys.add(key)
+            invalid_rows.append({
+                "turn_id": key,
+                "rejected_at": today,
+                "reason": invalid_reason,
+                "record": turn,
+            })
+            continue
         matrix = judge_turn(turn, patterns)
         if matrix is None:
             llm_down = True
             break                              # ADC unavailable — stop, retry next run
-        judged_keys.add(turn_key(turn))
+        judged_keys.add(key)
         for pat, v in matrix.items():
             rows.append({
+                "turn_id":    key,
                 "timestamp":  turn.get("timestamp", ""),
                 "session_id": turn.get("session_id", ""),
                 "pattern":    pat,
@@ -359,7 +482,8 @@ def main() -> int:
     report = [
         f"# Outcome Judge — {today}", "",
         f"Queued: {len(queue)} | judged this run: {len(judged_keys)} | "
-        f"quorum: {QUORUM} | LLM: {'unavailable' if llm_down else 'ok'}", "",
+        f"quorum: {QUORUM} | malformed quarantined: {len(invalid_rows)} | "
+        f"LLM: {'unavailable' if llm_down else 'ok'}", "",
         "Adversarial, evidence-cited verdicts on the patterns binary evals can't reach. "
         "Feeds measure_effectiveness as the JUDGE tier (below reproducible binary evals).", "",
         "## Failures found this run", "",
@@ -372,54 +496,44 @@ def main() -> int:
         print("[dry-run] queue untouched, nothing written")
         return 0
 
-    append_jsonl_many(RESULTS_FILE, rows)
-    # Re-read under lock before draining so turns appended while judging survive.
-    remaining = drain_queue(judged_keys)
+    written, quarantined, remaining = commit_judgements(rows, judged_keys, invalid_rows)
     atomic_write_text(DIAG_DIR / f"judge_{today}.md", report_txt)
 
-    print(f"Wrote: {RESULTS_FILE} (+{len(rows)} rows) | queue now {len(remaining)}")
+    print(
+        f"Wrote: {RESULTS_FILE} (+{written} rows) | "
+        f"quarantined: {quarantined} | queue now {len(remaining)}"
+    )
     return 0
 
 
 # ── Consumed by measure_effectiveness ────────────────────────────────────────────────
-def load_judge_fails(path: Path = RESULTS_FILE) -> dict[str, dict[str, bool]]:
+def load_judge_fails(path: Path | None = None) -> dict[str, dict[str, bool]]:
     """Join key (timestamp) → {pattern: failed?}. Mirrors evals.load_objective_fails so
     measure_effectiveness treats the judge as a parallel objective-style signal."""
     fails: dict[str, dict[str, bool]] = {}
-    if not path.exists():
-        return fails
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
+    result_path = path or RESULTS_FILE
+    for record in load_jsonl_objects(result_path).records:
+        key = record.get("timestamp") or record.get("session_id")
+        pattern = record.get("pattern")
+        if not isinstance(key, str) or not key or not isinstance(pattern, str) or not pattern:
             continue
-        try:
-            r = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        key = r.get("timestamp") or r.get("session_id") or ""
-        pat = r.get("pattern", "")
-        failed = r.get("passed") is False
-        d = fails.setdefault(key, {})
-        d[pat] = d.get(pat, False) or failed
+        failed = record.get("passed") is False
+        pattern_results = fails.setdefault(key, {})
+        pattern_results[pattern] = pattern_results.get(pattern, False) or failed
     return fails
 
 
-def judged_patterns(path: Path = RESULTS_FILE) -> set[str]:
+def judged_patterns(path: Path | None = None) -> set[str]:
     """Patterns the judge has produced verdicts for (have judge coverage)."""
     pats: set[str] = set()
-    if not path.exists():
-        return pats
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            pats.add(json.loads(line).get("pattern", ""))
-        except json.JSONDecodeError:
-            pass
+    result_path = path or RESULTS_FILE
+    for record in load_jsonl_objects(result_path).records:
+        pattern = record.get("pattern")
+        if isinstance(pattern, str):
+            pats.add(pattern)
     pats.discard("")
     return pats
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
