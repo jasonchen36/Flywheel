@@ -10,8 +10,7 @@
  * TRIGGER: PreToolUse / PostToolUse (Write, Edit, search_replace, Bash)
  */
 
-import { readFileSync, existsSync } from "fs";
-import { execSync } from "child_process";
+import { readFileSync } from "fs";
 
 try {
   const rawInput = readFileSync(0, "utf-8");

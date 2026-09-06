@@ -376,3 +376,12 @@ def test_main_bounds_large_stale_pending_report(
     output = capsys.readouterr().out
     assert "## Stale-pending" in output
     assert "… and 1 more" in output
+
+
+def test_objective_failure_rate_prefers_exact_turn_over_legacy_timestamp() -> None:
+    entry = SimpleNamespace(session_id="session-a", timestamp="same")
+    failures = {
+        "session-a|same": {"target": True},
+        "same": {"target": False},
+    }
+    assert measure_effectiveness.objective_failure_rate([entry], failures, "target") == 1.0

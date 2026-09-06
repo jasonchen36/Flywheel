@@ -47,8 +47,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from state_io import atomic_write_json, atomic_write_text, rewrite_jsonl
-from typing import Callable
+from state_io import (
+    atomic_write_json,
+    atomic_write_text,
+    exclusive_locks,
+    load_jsonl_objects,
+    rewrite_jsonl_unlocked,
+    try_read_json_object,
+)
+from typing import Any, Callable
 
 # Reuse the generator's loaders + classifier + paths — no path/attribution drift.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,6 +64,7 @@ from self_improve import (  # noqa: E402
     classify_entry,
     RatingEntry,
     RATINGS_FILE,
+    rating_entry_key,
     DIAGNOSTICS,
 )
 
@@ -114,7 +122,8 @@ def has_artifact(text: str) -> bool:
     if re.search(r"\bEXIT[: ]|\bexit code\b|\bPASS(ED)?\b|\bFAIL(ED)?\b", text, re.I):
         return True
     if re.search(r"\b\d+\s+(tests?|rows?|files?|passed|failed|matches)\b", text, re.I) and (
-        "```" in text or re.search(r"\b(EXIT|PASS|FAIL|pytest|rtk |\$ )", text, re.I)
+        "```" in text
+        or re.search(r"(?:\b(?:EXIT|PASS|FAIL|pytest)\b|\brtk\s|\$\s)", text, re.I)
     ):
         return True
     return False
@@ -150,7 +159,8 @@ def has_strong_artifact(text: str) -> bool:
     ):
         return True
     if re.search(
-        r"\b(verified (via|with|by)|proof:|evidence:|dry[- ]?run|bq query|pytest|rtk |\$ )\b",
+        r"(?:\bverified (?:via|with|by)\b|\bproof:|\bevidence:|\bdry[- ]?run\b|"
+        r"\bbq query\b|\bpytest\b|\brtk\s|\$\s)",
         text,
         re.I,
     ) and (
@@ -892,9 +902,25 @@ EVALS: list[Eval] = [
 ]
 
 
+def eval_catalog() -> dict[str, Eval]:
+    """Return the validated code registry, rejecting ambiguous predicate identities."""
+    catalog: dict[str, Eval] = {}
+    for eval_case in EVALS:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", eval_case.id):
+            raise ValueError(f"invalid eval id: {eval_case.id!r}")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", eval_case.pattern):
+            raise ValueError(f"invalid eval pattern: {eval_case.pattern!r}")
+        if isinstance(eval_case.version, bool) or not isinstance(eval_case.version, int) or eval_case.version < 1:
+            raise ValueError(f"invalid eval version for {eval_case.id}: {eval_case.version!r}")
+        if eval_case.id in catalog:
+            raise ValueError(f"duplicate eval id: {eval_case.id}")
+        catalog[eval_case.id] = eval_case
+    return catalog
+
+
 def covered_patterns() -> set[str]:
-    """Failure patterns that have at least one active eval."""
-    return {e.pattern for e in EVALS}
+    """Failure patterns that have at least one active code eval."""
+    return {eval_case.pattern for eval_case in eval_catalog().values()}
 
 
 # ── Scoring ──────────────────────────────────────────────────────────────────────
@@ -902,7 +928,7 @@ def score_text(text: str) -> dict:
     """{eval_id: {applied, passed, pattern}}. passed is None when the eval did not fire."""
     text = text or ""
     out: dict[str, dict] = {}
-    for e in EVALS:
+    for e in eval_catalog().values():
         applied = e.applies(text)
         out[e.id] = {
             "applied": applied,
@@ -916,47 +942,84 @@ def score_session(entry: RatingEntry) -> dict:
     return score_text(entry.response_preview)
 
 
-def load_objective_fails(path: Path = EVAL_RESULTS_FILE) -> dict[str, dict[str, bool]]:
-    """Join key (timestamp) → {pattern: failed?}. A pattern fails if ANY of its evals
-    applied and did not pass. Consumed by measure_effectiveness.py for the objective split."""
+def _result_turn_key(record: dict[str, Any]) -> str:
+    explicit = record.get("turn_key")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    session_id = record.get("session_id")
+    timestamp = record.get("timestamp")
+    session_id = session_id if isinstance(session_id, str) else ""
+    timestamp = timestamp if isinstance(timestamp, str) else ""
+    if session_id and timestamp:
+        return f"{session_id}|{timestamp}"
+    if timestamp:
+        return f"timestamp|{timestamp}"
+    return session_id
+
+
+def load_objective_fails(path: Path | None = None) -> dict[str, dict[str, bool]]:
+    """Load schema-checked objective failures keyed by exact rating turn."""
     fails: dict[str, dict[str, bool]] = {}
-    if not path.exists():
-        return fails
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                r = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            # Every row in eval_results.jsonl is an eval that FIRED (applied=True implicitly).
-            key = r.get("timestamp") or r.get("session_id") or ""
-            pat = r.get("pattern", "")
-            failed = r.get("passed") is False
-            d = fails.setdefault(key, {})
-            d[pat] = d.get(pat, False) or failed
+    catalog = eval_catalog()
+    result_path = path or EVAL_RESULTS_FILE
+    for record in load_jsonl_objects(result_path).records:
+        eval_id = record.get("eval_id")
+        passed = record.get("passed")
+        key = _result_turn_key(record)
+        if not isinstance(eval_id, str) or eval_id not in catalog or not isinstance(passed, bool) or not key:
+            continue
+        pattern = catalog[eval_id].pattern
+        recorded_pattern = record.get("pattern")
+        if recorded_pattern is not None and recorded_pattern != "" and recorded_pattern != pattern:
+            continue
+        pattern_fails = fails.setdefault(key, {})
+        pattern_fails[pattern] = pattern_fails.get(pattern, False) or not passed
     return fails
 
 
 # ── Registry reconciliation (anti-gaming ledger) ─────────────────────────────────
-def load_registry() -> dict:
-    if REGISTRY_FILE.exists():
-        try:
-            return json.loads(REGISTRY_FILE.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {"updated": "", "evals": {}, "log": []}
+def normalize_registry(value: object) -> dict[str, Any]:
+    data = value if isinstance(value, dict) else {}
+    raw_evals = data.get("evals")
+    raw_invalid = data.get("invalid_evals")
+    valid: dict[str, dict[str, Any]] = {}
+    invalid: dict[str, Any] = {}
+    if isinstance(raw_evals, dict):
+        for eval_id, record in raw_evals.items():
+            if isinstance(eval_id, str) and eval_id and isinstance(record, dict):
+                valid[eval_id] = record
+            elif isinstance(eval_id, str):
+                invalid[eval_id] = record
+    if isinstance(raw_invalid, dict):
+        invalid.update({key: record for key, record in raw_invalid.items() if isinstance(key, str)})
+    raw_log = data.get("log")
+    updated = data.get("updated")
+    return {
+        "updated": updated if isinstance(updated, str) else "",
+        "evals": valid,
+        "invalid_evals": invalid,
+        "log": [record for record in raw_log if isinstance(record, dict)]
+        if isinstance(raw_log, list)
+        else [],
+    }
 
 
-def reconcile_registry(registry: dict, today: str) -> tuple[list[str], list[str]]:
-    """Sync code EVALS into the registry. Grow-only: orphans flagged, never deleted."""
+def load_registry() -> dict[str, Any]:
+    data, _error = try_read_json_object(REGISTRY_FILE)
+    return normalize_registry(data)
+
+
+def reconcile_registry(registry: dict[str, Any], today: str) -> tuple[list[str], list[str]]:
+    """Sync validated code evals into a grow-only normalized registry."""
+    normalized = normalize_registry(registry)
+    registry.clear()
+    registry.update(normalized)
     changes: list[str] = []
-    reg_evals: dict = registry.setdefault("evals", {})
-    code_ids = {e.id for e in EVALS}
+    reg_evals: dict[str, dict[str, Any]] = registry["evals"]
+    catalog = eval_catalog()
+    code_ids = set(catalog)
 
-    for e in EVALS:
+    for e in catalog.values():
         if e.id not in reg_evals:
             reg_evals[e.id] = {
                 "pattern": e.pattern, "version": e.version,
@@ -968,15 +1031,27 @@ def reconcile_registry(registry: dict, today: str) -> tuple[list[str], list[str]
             if r.get("version") != e.version:
                 changes.append(f"version {e.id}: {r.get('version')} → {e.version}")
                 r["version"], r["updated"] = e.version, today
+            if r.get("pattern") != e.pattern:
+                changes.append(f"pattern {e.id}: {r.get('pattern')} → {e.pattern}")
+                r["pattern"], r["updated"] = e.pattern, today
+            if r.get("source") != e.source:
+                changes.append(f"source {e.id}: {r.get('source')} → {e.source}")
+                r["source"], r["updated"] = e.source, today
             if r.get("status") == "retired":
                 r["status"] = "active"
                 changes.append(f"reactivated {e.id} (re-added in code)")
             elif r.get("status") == "orphaned":
                 r["status"] = "active"
                 changes.append(f"un-orphaned {e.id} (back in code)")
+            elif r.get("status") not in {"active", "retired", "orphaned"}:
+                changes.append(f"status {e.id}: {r.get('status')} → active")
+                r["status"], r["updated"] = "active", today
 
-    orphans = [rid for rid, r in reg_evals.items()
-               if rid not in code_ids and r.get("status") == "active"]
+    orphans = [
+        rid
+        for rid, record in reg_evals.items()
+        if rid not in code_ids and record.get("status") == "active"
+    ]
     for rid in orphans:
         reg_evals[rid]["status"] = "orphaned"
         changes.append(f"ORPHANED {rid} (in registry, not in code) — NOT deleted")
@@ -993,12 +1068,19 @@ def build_report(entries: list[RatingEntry], rows: list[dict], registry: dict,
     applied_ct: Counter = Counter()
     passed_ct: Counter = Counter()
     failed_ct: Counter = Counter()
+    catalog = eval_catalog()
     for row in rows:
-        applied_ct[row["eval_id"]] += 1
-        if row["passed"]:
-            passed_ct[row["eval_id"]] += 1
+        if not isinstance(row, dict):
+            continue
+        eval_id = row.get("eval_id")
+        passed = row.get("passed")
+        if not isinstance(eval_id, str) or eval_id not in catalog or not isinstance(passed, bool):
+            continue
+        applied_ct[eval_id] += 1
+        if passed:
+            passed_ct[eval_id] += 1
         else:
-            failed_ct[row["eval_id"]] += 1
+            failed_ct[eval_id] += 1
 
     # Observed failure patterns (subjective classifier over low-rated) vs eval coverage.
     low = [e for e in entries if e.rating <= LOW]
@@ -1008,7 +1090,12 @@ def build_report(entries: list[RatingEntry], rows: list[dict], registry: dict,
     covered = covered_patterns()
     gaps = [(p, c) for p, c in observed.most_common() if p not in covered]
 
-    active = [eid for eid, r in registry.get("evals", {}).items() if r.get("status") == "active"]
+    registry_evals = registry.get("evals")
+    active = [
+        eval_id
+        for eval_id, record in registry_evals.items()
+        if isinstance(record, dict) and record.get("status") == "active"
+    ] if isinstance(registry_evals, dict) else []
 
     lines = [
         f"# Binary Eval Suite — {today}", "",
@@ -1020,7 +1107,7 @@ def build_report(entries: list[RatingEntry], rows: list[dict], registry: dict,
         "| eval | pattern | fired | passed | failed | fail-rate |",
         "|---|---|---|---|---|---|",
     ]
-    for eval_case in EVALS:
+    for eval_case in catalog.values():
         applied = applied_ct[eval_case.id]
         failure_rate = (failed_ct[eval_case.id] / applied) if applied else 0.0
         lines.append(
@@ -1046,14 +1133,88 @@ def build_report(entries: list[RatingEntry], rows: list[dict], registry: dict,
     return "\n".join(lines) + "\n"
 
 
+def build_result_rows(entries: list[RatingEntry]) -> list[dict[str, Any]]:
+    """Build schema-checked fired rows, preferring trusted full-response captures."""
+    catalog = eval_catalog()
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        base = {
+            "turn_key": rating_entry_key(entry),
+            "timestamp": entry.timestamp,
+            "session_id": entry.session_id,
+            "rating": entry.rating,
+        }
+        captured_count = 0
+        captured = entry.eval_results if isinstance(entry.eval_results, dict) else {}
+        for eval_id, result in captured.items():
+            eval_case = catalog.get(eval_id) if isinstance(eval_id, str) else None
+            if eval_case is None or not isinstance(result, dict):
+                continue
+            passed = result.get("passed")
+            recorded_pattern = result.get("pattern")
+            if (
+                not isinstance(passed, bool)
+                or (
+                    recorded_pattern is not None
+                    and recorded_pattern != ""
+                    and recorded_pattern != eval_case.pattern
+                )
+            ):
+                continue
+            rows.append(
+                {
+                    **base,
+                    "eval_id": eval_id,
+                    "pattern": eval_case.pattern,
+                    "passed": passed,
+                }
+            )
+            captured_count += 1
+        if captured_count:
+            continue
+        for eval_id, result in score_text(entry.response_preview).items():
+            if not result["applied"]:
+                continue
+            rows.append(
+                {
+                    **base,
+                    "eval_id": eval_id,
+                    "pattern": result["pattern"],
+                    "passed": result["passed"],
+                }
+            )
+    return rows
+
+
+def _reconcile_report_and_write(
+    entries: list[RatingEntry],
+    rows: list[dict[str, Any]],
+    today: str,
+    *,
+    dry_run: bool,
+) -> str:
+    if dry_run:
+        registry = load_registry()
+        changes, orphans = reconcile_registry(registry, today)
+        return build_report(entries, rows, registry, changes, orphans, today)
+    with exclusive_locks([EVAL_RESULTS_FILE, REGISTRY_FILE]):
+        registry = load_registry()
+        changes, orphans = reconcile_registry(registry, today)
+        report = build_report(entries, rows, registry, changes, orphans, today)
+        rewrite_jsonl_unlocked(EVAL_RESULTS_FILE, rows)
+        atomic_write_json(REGISTRY_FILE, registry)
+    atomic_write_text(DIAGNOSTICS / f"evals_{today}.md", report)
+    return report
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────────
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Binary eval suite for the self-improvement loop")
     ap.add_argument("--dry-run", action="store_true", help="print report, write nothing")
     ap.add_argument("--coverage", action="store_true", help="coverage / gap report only")
     ap.add_argument("--score-stdin", action="store_true",
                     help="score one response from stdin, print JSON, exit")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.score_stdin:
         print(json.dumps(score_text(sys.stdin.read())))
@@ -1074,38 +1235,15 @@ def main() -> int:
         print(f"GAPS (no eval): {gaps or 'none'}")
         return 0
 
-    # Score every session. Prefer full-text eval_results captured at rating time
-    # (RatingCapture — richer than the 500-char preview); fall back to scoring the stored
-    # preview for historical / un-scored entries. Predicates always live here.
-    rows: list[dict] = []
-    for e in entries:
-        if e.eval_results:
-            for eid, r in e.eval_results.items():
-                rows.append({
-                    "timestamp": e.timestamp, "session_id": e.session_id, "rating": e.rating,
-                    "eval_id": eid, "pattern": r.get("pattern", ""), "passed": r.get("passed"),
-                })
-        else:
-            for eid, r in score_text(e.response_preview).items():
-                if not r["applied"]:
-                    continue
-                rows.append({
-                    "timestamp": e.timestamp, "session_id": e.session_id, "rating": e.rating,
-                    "eval_id": eid, "pattern": r["pattern"], "passed": r["passed"],
-                })
-
-    registry = load_registry()
-    changes, orphans = reconcile_registry(registry, today)
-    report = build_report(entries, rows, registry, changes, orphans, today)
+    rows = build_result_rows(entries)
+    report = _reconcile_report_and_write(
+        entries, rows, today, dry_run=args.dry_run
+    )
     print(report)
 
     if args.dry_run:
         print("[dry-run] no files written")
         return 0
-
-    rewrite_jsonl(EVAL_RESULTS_FILE, rows)  # full re-score each run (idempotent)
-    atomic_write_json(REGISTRY_FILE, registry)
-    atomic_write_text(DIAGNOSTICS / f"evals_{today}.md", report)
 
     print(f"Wrote: {EVAL_RESULTS_FILE} ({len(rows)} fired rows)")
     print(f"Wrote: {REGISTRY_FILE}")
@@ -1113,5 +1251,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

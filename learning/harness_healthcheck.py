@@ -398,10 +398,49 @@ def main(argv: list[str] | None = None) -> int:
     if edits_value and (not isinstance(edits_value, list) or len(edits) != len(edits_value)):
         report["errors"].append("skill_autofix edits must be a JSON list of objects")
         report["ok"] = False
+    invalid_edits_value = led.get("invalid_edits", [])
+    invalid_edits = (
+        [record for record in invalid_edits_value if isinstance(record, dict)]
+        if isinstance(invalid_edits_value, list)
+        else []
+    )
+    failure_states = {
+        "rollback-failed",
+        "reverted-audit-failed",
+        "apply-audit-failed",
+        "validation-failed-audit-failed",
+        "invalid",
+    }
+    failed_edits = [
+        f"/{edit.get('skill')}:{edit.get('pattern')} ({edit.get('status')})"
+        for edit in edits
+        if edit.get("status") in failure_states
+    ]
     report["checks"]["skill_autofix"] = {
         "active_edits": sum(1 for edit in edits if edit.get("status") == "active"),
         "total_edits": len(edits),
+        "failed_edits": failed_edits,
+        "quarantined_edits": len(invalid_edits),
     }
+    critical_autofix = [
+        item
+        for item in failed_edits
+        if "(rollback-failed)" in item or "(invalid)" in item
+    ]
+    if critical_autofix:
+        report["errors"].append(
+            f"skill_autofix has {len(critical_autofix)} unresolved critical edits: {critical_autofix}"
+        )
+        report["ok"] = False
+    audit_failures = [item for item in failed_edits if item not in critical_autofix]
+    if audit_failures:
+        report["warnings"].append(
+            f"skill_autofix has {len(audit_failures)} audit-failed edits: {audit_failures}"
+        )
+    if invalid_edits:
+        report["warnings"].append(
+            f"skill_autofix quarantined {len(invalid_edits)} malformed ledger records"
+        )
     # Burn-in stall: active edits that can never complete measurement because
     # no post-apply traffic exists for the skill (or the sensor is dark).
     today = datetime.now(timezone.utc).date()

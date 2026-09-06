@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import shlex
 import shutil
 import subprocess
@@ -42,8 +44,9 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from harness_paths import COMMANDS, DIAGNOSTICS, PI_SKILLS, STATE
-from state_io import atomic_write_json, atomic_write_text
+from state_io import atomic_write_json, atomic_write_text, exclusive_lock, try_read_json_object
 
 # Shared primitives — same cross-import discipline the rest of the loop uses (zero drift).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -80,6 +83,8 @@ ALLOWED_VALIDATION_COMMANDS = frozenset(
     {"bun", "cargo", "go", "mypy", "npm", "pnpm", "pytest", "python", "python3", "ruff", "shellcheck", "yarn"}
 )
 SHELL_CONTROL_TOKENS = frozenset({"&&", "||", ";", "|", "<", ">", ">>", "2>", "2>>", "&"})
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 # ── Bounded-edit markers ────────────────────────────────────────────────────────────
 START = "<!-- AUTO-LEARNED-GUARDRAILS:start -->"
@@ -88,10 +93,18 @@ END   = "<!-- AUTO-LEARNED-GUARDRAILS:end -->"
 
 # ── Git snapshot repo (dedicated — never entangles ~/.claude, which gitignores commands/) ──
 def _git(*args: str) -> str:
-    return subprocess.run(
+    result = subprocess.run(
         ["git", "-C", str(SNAP_REPO), *args],
-        capture_output=True, text=True,
-    ).stdout.strip()
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = ((result.stderr or "") + (result.stdout or "")).strip()[-500:]
+        raise RuntimeError(
+            f"git {' '.join(args)} failed with exit {result.returncode}: {detail}"
+        )
+    return result.stdout.strip()
 
 
 def ensure_repo() -> None:
@@ -110,10 +123,16 @@ def ensure_repo() -> None:
         _git("checkout", "-q", "-b", "autofix")
 
 
+def _valid_skill_name(skill: object) -> bool:
+    return isinstance(skill, str) and bool(SKILL_NAME_RE.fullmatch(skill))
+
+
 def _snap_name(skill: str, surface: str) -> str:
     """Unique snapshot blob name so claude/pi skills never collide."""
-    safe = skill.replace("/", "_")
-    return f"{surface}__{safe}.md"
+    if not _valid_skill_name(skill):
+        raise ValueError(f"invalid skill name: {skill!r}")
+    safe_surface = surface if surface in {"claude", "pi"} else "claude"
+    return f"{safe_surface}__{skill}.md"
 
 
 def snapshot(skill: str, live: Path, msg: str, surface: str = "claude") -> str:
@@ -125,19 +144,22 @@ def snapshot(skill: str, live: Path, msg: str, surface: str = "claude") -> str:
     return _git("rev-parse", "HEAD")
 
 
-def content_at(skill: str, commit: str, surface: str = "claude") -> str:
-    """The skill file's exact content at a past commit — the revert source.
-    Must NOT strip (unlike _git): trailing newline etc. are part of the file."""
+def content_at(skill: str, commit: str, surface: str = "claude") -> str | None:
+    """Return the exact prior snapshot, or ``None`` when it cannot be trusted."""
+    if not _valid_skill_name(skill) or not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
+        return None
     name = _snap_name(skill, surface)
-    # Backward compat: older ledger commits used bare {skill}.md
+    # Backward compat: older ledger commits used bare {skill}.md.
     for candidate in (name, f"{skill}.md"):
         out = subprocess.run(
             ["git", "-C", str(SNAP_REPO), "show", f"{commit}:{candidate}"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if out.returncode == 0:
             return out.stdout
-    return ""
+    return None
 
 
 # ── Bounded section upsert / strip (deterministic; LLM never writes the file) ─────────
@@ -207,13 +229,8 @@ def _validation_argv(cmd: str) -> tuple[list[str] | None, str]:
         argv = shlex.split(cmd, posix=True)
     except ValueError as exc:
         return None, f"invalid validation command: {exc}"
-    if not argv:
-        return None, "validation command is empty"
     if len(argv) > MAX_VALIDATION_ARGS:
         return None, f"validation command exceeds {MAX_VALIDATION_ARGS} arguments"
-    if any(arg in SHELL_CONTROL_TOKENS for arg in argv):
-        return None, "validation command contains a shell control operator"
-
     executable = Path(argv[0]).name
     if argv[0] != executable or executable not in ALLOWED_VALIDATION_COMMANDS:
         return None, f"validation executable is not allowed: {argv[0]}"
@@ -269,56 +286,51 @@ def skill_file(skill: str) -> Path | None:
     return resolved[0] if resolved else None
 
 
+def _safe_skill_path(path: Path, root: Path, *, nested: bool) -> bool:
+    try:
+        if not path.is_file() or path.is_symlink():
+            return False
+        resolved = path.resolve()
+        resolved_root = root.resolve()
+        return resolved_root in resolved.parents if nested else resolved.parent == resolved_root
+    except OSError:
+        return False
+
+
 def skill_file_with_surface(skill: str) -> tuple[Path, str] | None:
-    if not skill:
+    if not _valid_skill_name(skill):
         return None
-    # Claude commands
-    p = COMMANDS_DIR / f"{skill}.md"
-    try:
-        if p.exists() and not p.is_symlink() and p.resolve().parent == COMMANDS_DIR.resolve():
-            return p, "claude"
-    except OSError:
-        pass
-    # Pi skills: directory package
-    pi_dir = PI_SKILLS_DIR / skill / "SKILL.md"
-    try:
-        if (
-            pi_dir.exists()
-            and not pi_dir.is_symlink()
-            and PI_SKILLS_DIR.resolve() in pi_dir.resolve().parents
-        ):
-            return pi_dir, "pi"
-    except OSError:
-        pass
-    # Pi skills: flat .md
-    pi_flat = PI_SKILLS_DIR / f"{skill}.md"
-    try:
-        if (
-            pi_flat.exists()
-            and not pi_flat.is_symlink()
-            and pi_flat.resolve().parent == PI_SKILLS_DIR.resolve()
-        ):
-            return pi_flat, "pi"
-    except OSError:
-        pass
+    command = COMMANDS_DIR / f"{skill}.md"
+    if _safe_skill_path(command, COMMANDS_DIR, nested=False):
+        return command, "claude"
+    package = PI_SKILLS_DIR / skill / "SKILL.md"
+    if _safe_skill_path(package, PI_SKILLS_DIR, nested=True):
+        return package, "pi"
+    flat = PI_SKILLS_DIR / f"{skill}.md"
+    if _safe_skill_path(flat, PI_SKILLS_DIR, nested=False):
+        return flat, "pi"
     return None
 
 
 # ── Stats ────────────────────────────────────────────────────────────────────────────
-def skill_sessions(entries: list, skill: str, since: str | None = None) -> list:
-    """Sessions attributed to skill via primary skill OR skill_candidates multi-label."""
-    out = []
-    for e in entries:
-        if since is not None and e.timestamp <= since:
+def skill_sessions(entries: list[Any], skill: str, since: str | None = None) -> list[Any]:
+    """Return valid sessions attributed through primary or candidate skill labels."""
+    normalized_skill = skill.lower()
+    out: list[Any] = []
+    for entry in entries:
+        timestamp = getattr(entry, "timestamp", "")
+        if since is not None and isinstance(timestamp, str) and timestamp <= since:
             continue
-        primary = (e.skill or "").lower()
-        cands = set()
-        # RatingEntry may only have .skill; jsonl may have skill_candidates on raw dict
-        raw_cands = getattr(e, "skill_candidates", None)
-        if isinstance(raw_cands, list):
-            cands = {str(c).lower() for c in raw_cands}
-        if primary == skill or skill in cands:
-            out.append(e)
+        primary_value = getattr(entry, "skill", "")
+        primary = primary_value.lower() if isinstance(primary_value, str) else ""
+        raw_cands = getattr(entry, "skill_candidates", None)
+        candidates = {
+            candidate.lower()
+            for candidate in raw_cands
+            if isinstance(candidate, str) and candidate
+        } if isinstance(raw_cands, list) else set()
+        if primary == normalized_skill or normalized_skill in candidates:
+            out.append(entry)
     return out
 
 
@@ -326,71 +338,139 @@ def count_guardrail_bullets(text: str) -> int:
     """Count bullet lines inside the auto-learned guardrails section."""
     if START not in text or END not in text:
         return 0
-    try:
-        body = text.split(START, 1)[1].split(END, 1)[0]
-    except IndexError:
-        return 0
+    body = text.split(START, 1)[1].split(END, 1)[0]
     return sum(1 for ln in body.splitlines() if ln.strip().startswith(("-", "*", "•")))
 
 
-def fail_rate(sessions: list) -> tuple[float, int]:
-    if not sessions:
+def fail_rate(sessions: list[Any]) -> tuple[float, int]:
+    ratings = [
+        float(value)
+        for entry in sessions
+        if isinstance((value := getattr(entry, "rating", None)), (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    ]
+    if not ratings:
         return 0.0, 0
-    low = sum(1 for e in sessions if e.rating <= LOW)
-    return low / len(sessions), low
+    low = sum(1 for rating in ratings if rating <= LOW)
+    return low / len(ratings), low
 
 
-def dominant_pattern(sessions: list) -> str:
-    low = [e for e in sessions if e.rating <= LOW]
-    c = Counter(p for e in low for p in classify_entry(e) if p != "other")
-    return c.most_common(1)[0][0] if c else "general_quality"
+def dominant_pattern(sessions: list[Any]) -> str:
+    low = [
+        entry
+        for entry in sessions
+        if isinstance(getattr(entry, "rating", None), (int, float))
+        and not isinstance(getattr(entry, "rating", None), bool)
+        and float(entry.rating) <= LOW
+    ]
+    counts = Counter(
+        pattern
+        for entry in low
+        for pattern in classify_entry(entry)
+        if isinstance(pattern, str) and pattern not in {"", "other"}
+    )
+    return counts.most_common(1)[0][0] if counts else "general_quality"
 
 
 # ── Ledger ────────────────────────────────────────────────────────────────────────────
-def load_ledger() -> dict:
-    if LEDGER_FILE.exists():
-        try:
-            return json.loads(LEDGER_FILE.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {"edits": [], "log": []}
+def _valid_edit_record(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and _valid_skill_name(value.get("skill"))
+        and isinstance(value.get("pattern"), str)
+        and bool(value["pattern"])
+        and isinstance(value.get("status"), str)
+        and bool(value["status"])
+    )
 
 
-def save_ledger(ledger: dict) -> None:
-    atomic_write_json(LEDGER_FILE, ledger)
+def normalize_ledger(value: object) -> dict[str, list[dict[str, Any]]]:
+    data = value if isinstance(value, dict) else {}
+    raw_edits = data.get("edits")
+    raw_invalid = data.get("invalid_edits")
+    log = data.get("log")
+    edits = raw_edits if isinstance(raw_edits, list) else []
+    invalid = [record for record in edits if not _valid_edit_record(record)]
+    if isinstance(raw_invalid, list):
+        invalid.extend(record for record in raw_invalid if isinstance(record, dict))
+    return {
+        "edits": [record for record in edits if _valid_edit_record(record)],
+        "invalid_edits": [record for record in invalid if isinstance(record, dict)],
+        "log": [record for record in log if isinstance(record, dict)]
+        if isinstance(log, list)
+        else [],
+    }
 
 
-def active_edit_for(ledger: dict, skill: str) -> dict | None:
-    for ed in ledger["edits"]:
-        if ed["skill"] == skill and ed["status"] == "active":
-            return ed
+def load_ledger() -> dict[str, list[dict[str, Any]]]:
+    data, _error = try_read_json_object(LEDGER_FILE)
+    return normalize_ledger(data)
+
+
+def save_ledger(ledger: dict[str, Any], *, locked: bool = False) -> None:
+    normalized = normalize_ledger(ledger)
+    if locked:
+        atomic_write_json(LEDGER_FILE, normalized)
+        return
+    with exclusive_lock(LEDGER_FILE):
+        atomic_write_json(LEDGER_FILE, normalized)
+
+
+def active_edit_for(ledger: dict[str, Any], skill: str) -> dict[str, Any] | None:
+    for edit in ledger.get("edits", []):
+        if _valid_edit_record(edit) and edit.get("skill") == skill and edit.get("status") == "active":
+            return edit
     return None
 
 
-def reverted_patterns(ledger: dict, skill: str) -> set[str]:
-    """Patterns we already tried and reverted for this skill — cooldown to prevent thrash."""
-    return {ed["pattern"] for ed in ledger["edits"]
-            if ed["skill"] == skill and ed["status"] == "reverted"}
+def reverted_patterns(ledger: dict[str, Any], skill: str) -> set[str]:
+    """Patterns already tried and reverted for this skill."""
+    return {
+        str(edit["pattern"])
+        for edit in ledger.get("edits", [])
+        if _valid_edit_record(edit)
+        and edit.get("skill") == skill
+        and edit.get("status") == "reverted"
+    }
 
 
 # ── LLM: generate the bounded guardrail block (only thing the model writes) ───────────
 def _passing_behaviors(entries: list, skill: str) -> str:
-    """Self-Harness (Zhang et al. 2026 / Weng 2026): preserve what already works."""
-    good = [e for e in entries if e.skill == skill and e.rating >= 7]
+    """Summarize well-formed passing behavior without trusting persisted row shapes."""
+    good = [
+        entry
+        for entry in entries
+        if getattr(entry, "skill", None) == skill
+        and isinstance((rating := getattr(entry, "rating", None)), (int, float))
+        and not isinstance(rating, bool)
+        and math.isfinite(float(rating))
+        and float(rating) >= 7
+    ]
     if not good:
         return "(no high-rated sessions attributed to this skill yet)"
     lines = []
-    for e in sorted(good, key=lambda x: -x.rating)[:4]:
-        s = (e.sentiment_summary or e.response_preview or "").strip()[:160]
-        if s:
-            lines.append(f"- [{e.rating}/10] {s}")
+    for entry in sorted(good, key=lambda item: -float(item.rating))[:4]:
+        summary = getattr(entry, "sentiment_summary", "")
+        preview = getattr(entry, "response_preview", "")
+        summary = summary if isinstance(summary, str) else ""
+        preview = preview if isinstance(preview, str) else ""
+        text = (summary or preview).strip()[:160]
+        if text:
+            lines.append(f"- [{entry.rating}/10] {text}")
     return "\n".join(lines) or "(no summaries on high-rated sessions)"
 
 
 def _prior_failed_edits(ledger: dict, skill: str) -> str:
-    """Self-Harness: include previously attempted edits so proposer diversifies."""
-    failed = [ed for ed in ledger.get("edits", [])
-              if ed.get("skill") == skill and ed.get("status") == "reverted"]
+    """Include only well-formed reverted edits so malformed history cannot crash proposals."""
+    raw_edits = ledger.get("edits")
+    failed = [
+        edit
+        for edit in raw_edits
+        if isinstance(edit, dict)
+        and edit.get("skill") == skill
+        and edit.get("status") == "reverted"
+    ] if isinstance(raw_edits, list) else []
     if not failed:
         return "(none)"
     return "\n".join(
@@ -435,47 +515,255 @@ def generate_guardrail(skill: str, pattern: str, examples: list, today: str,
 
 
 # ── Evaluate active edits: measure-after → confirm or auto-revert ─────────────────────
-def evaluate_active(ledger: dict, entries: list, today: str,
-                    changes: list[str], dry_run: bool) -> None:
-    for ed in ledger["edits"]:
-        if ed["status"] != "active":
+def _normalized_rate(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        rate = float(value)
+    except ValueError:
+        return None
+    if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
+        return None
+    return rate
+
+
+def _record_rollback_failure(
+    edit: dict[str, Any], today: str, reason: str, changes: list[str]
+) -> None:
+    edit["status"] = "rollback-failed"
+    edit["rollback_failed"] = today
+    edit["rollback_error"] = reason[:500]
+    changes.append(f"ROLLBACK FAILED /{edit['skill']} — {reason[:200]}")
+
+
+def evaluate_active(
+    ledger: dict[str, Any],
+    entries: list[Any],
+    today: str,
+    changes: list[str],
+    dry_run: bool,
+) -> None:
+    for edit in ledger.get("edits", []):
+        if not _valid_edit_record(edit) or edit.get("status") != "active":
             continue
-        post = skill_sessions(entries, ed["skill"], since=ed["applied"])
+        applied = edit.get("applied")
+        baseline = _normalized_rate(edit.get("baseline_fail_rate"))
+        if not isinstance(applied, str) or not applied or baseline is None:
+            edit["status"] = "invalid"
+            edit["invalid_at"] = today
+            edit["invalid_reason"] = "active edit requires applied date and baseline_fail_rate in [0,1]"
+            changes.append(f"INVALID /{edit['skill']} — malformed active edit state")
+            continue
+
+        post = skill_sessions(entries, str(edit["skill"]), since=applied)
         rate, _ = fail_rate(post)
-        ed["post_n"] = len(post)
+        edit["post_n"] = len(post)
         if len(post) < MIN_AFTER:
             continue
-        v = verdict_for(ed["baseline_fail_rate"], rate, len(post), MIN_AFTER)
-        ed["post_fail_rate"] = round(rate, 3)
-        ed["verdict"] = v
-        surface = ed.get("surface") or "claude"
-        if v in ("flat", "regressed"):
-            resolved = skill_file_with_surface(ed["skill"])
-            live = resolved[0] if resolved else None
-            surface = (resolved[1] if resolved else surface)
-            if live and not dry_run:
-                atomic_write_text(
-                    live, content_at(ed["skill"], ed["commit_before"], surface)
+        verdict = verdict_for(baseline, rate, len(post), MIN_AFTER)
+        edit["post_fail_rate"] = round(rate, 3)
+        edit["verdict"] = verdict
+        surface = edit.get("surface") if edit.get("surface") in {"claude", "pi"} else "claude"
+
+        if verdict in {"flat", "regressed"}:
+            resolved = skill_file_with_surface(str(edit["skill"]))
+            if resolved is None:
+                _record_rollback_failure(edit, today, "live skill file is unavailable", changes)
+                continue
+            live, surface = resolved
+            commit_before = edit.get("commit_before")
+            prior = content_at(str(edit["skill"]), commit_before, surface)
+            if prior is None:
+                _record_rollback_failure(edit, today, "trusted pre-edit snapshot is unavailable", changes)
+                continue
+            if dry_run:
+                changes.append(
+                    f"WOULD REVERT /{edit['skill']} ({surface}) — {verdict} "
+                    f"(post {rate:.2f} ≥ base {baseline:.2f})"
                 )
-                snapshot(ed["skill"], live,
-                         f"revert /{ed['skill']} — {v} post={rate:.2f} base={ed['baseline_fail_rate']:.2f}",
-                         surface=surface)
-            ed["status"] = "reverted"
-            ed["reverted"] = today
-            changes.append(f"REVERTED /{ed['skill']} ({surface}) — {v} (post {rate:.2f} ≥ base {ed['baseline_fail_rate']:.2f})")
-        elif v in ("working", "improving", "resolved"):
-            ed["status"] = "confirmed"
-            ed["confirmed"] = today
-            changes.append(f"confirmed /{ed['skill']} ({surface}) — {v} (post {rate:.2f} < base {ed['baseline_fail_rate']:.2f})")
+                continue
+            try:
+                with exclusive_lock(live):
+                    atomic_write_text(live, prior)
+                    try:
+                        rollback_commit = snapshot(
+                            str(edit["skill"]),
+                            live,
+                            f"revert /{edit['skill']} — {verdict} post={rate:.2f} base={baseline:.2f}",
+                            surface=surface,
+                        )
+                    except (OSError, RuntimeError) as exc:
+                        edit["status"] = "reverted-audit-failed"
+                        edit["reverted"] = today
+                        edit["rollback_audit_error"] = str(exc)[:500]
+                        changes.append(
+                            f"REVERTED /{edit['skill']} ({surface}) — snapshot audit failed: {exc}"
+                        )
+                        continue
+            except (OSError, TimeoutError) as exc:
+                _record_rollback_failure(edit, today, f"restore failed: {exc}", changes)
+                continue
+            edit["status"] = "reverted"
+            edit["reverted"] = today
+            edit["rollback_commit"] = rollback_commit
+            edit.pop("rollback_error", None)
+            changes.append(
+                f"REVERTED /{edit['skill']} ({surface}) — {verdict} "
+                f"(post {rate:.2f} ≥ base {baseline:.2f})"
+            )
+        elif verdict in {"working", "improving", "resolved"}:
+            edit["status"] = "confirmed"
+            edit["confirmed"] = today
+            changes.append(
+                f"confirmed /{edit['skill']} ({surface}) — {verdict} "
+                f"(post {rate:.2f} < base {baseline:.2f})"
+            )
 
 
 # ── Propose + apply new edits for qualifying skills ───────────────────────────────────
-def propose_new(ledger: dict, entries: list, today: str, changes: list[str],
-                use_llm: bool, dry_run: bool) -> list[str]:
+def _apply_guardrail(
+    *,
+    skill: str,
+    pattern: str,
+    surface: str,
+    live: Path,
+    block: str,
+    today: str,
+    baseline_rate: float,
+    baseline_n: int,
+) -> tuple[dict[str, Any] | None, str]:
+    validation_cmd = parse_validation_contract(block)
+    record: dict[str, Any] = {
+        "skill": skill,
+        "pattern": pattern,
+        "surface": surface,
+        "baseline_fail_rate": round(baseline_rate, 3),
+        "baseline_n": baseline_n,
+        "expected_outcome": (
+            f"fix '{pattern}' on /{skill} "
+            f"(baseline fail rate {baseline_rate:.2f}, n={baseline_n})"
+        ),
+        "validation": None,
+        "applied": today,
+        "post_n": 0,
+    }
+    try:
+        with exclusive_lock(live):
+            original = live.read_text()
+            try:
+                commit_before = snapshot(
+                    skill, live, f"before autofix /{skill} ({pattern})", surface=surface
+                )
+            except (OSError, RuntimeError) as exc:
+                return None, f"deferred /{skill} — pre-edit snapshot failed: {exc}"
+            record["commit_before"] = commit_before
+
+            new_content = upsert_section(original, block)
+            if not validate_skill_content(new_content):
+                return None, f"deferred /{skill} — generated content failed format validation"
+
+            atomic_write_text(live, new_content)
+            try:
+                commit_applied = snapshot(
+                    skill, live, f"autofix /{skill} ({pattern})", surface=surface
+                )
+            except (OSError, RuntimeError) as exc:
+                try:
+                    atomic_write_text(live, original)
+                except OSError as restore_exc:
+                    record.update(
+                        {
+                            "status": "rollback-failed",
+                            "rollback_error": str(restore_exc)[:500],
+                            "apply_error": str(exc)[:500],
+                        }
+                    )
+                    return record, (
+                        f"ROLLBACK FAILED /{skill} [{surface}] after snapshot failure: "
+                        f"{restore_exc}"
+                    )
+                record.update({"status": "apply-audit-failed", "apply_error": str(exc)[:500]})
+                return record, f"deferred /{skill} — applied snapshot failed; live file restored: {exc}"
+
+            record["commit_applied"] = commit_applied
+            record["commit_after"] = commit_applied
+            if not validation_cmd:
+                record["status"] = "active"
+                return record, (
+                    f"APPLIED /{skill} [{surface}] — guardrail for '{pattern}' "
+                    f"(baseline {baseline_rate:.2f}, n={baseline_n})"
+                )
+
+            ok, validation_note = run_validation(validation_cmd, live.parent)
+            record["validation"] = (
+                f"pass: {validation_note[:200]}" if ok else f"fail: {validation_note[:200]}"
+            )
+            if ok:
+                record["status"] = "active"
+                return record, (
+                    f"APPLIED /{skill} [{surface}] — guardrail for '{pattern}' "
+                    f"(baseline {baseline_rate:.2f}, n={baseline_n})"
+                )
+
+            try:
+                atomic_write_text(live, original)
+            except OSError as exc:
+                record.update({"status": "rollback-failed", "rollback_error": str(exc)[:500]})
+                return record, f"ROLLBACK FAILED /{skill} [{surface}] — validation failed: {exc}"
+            try:
+                rollback_commit = snapshot(
+                    skill,
+                    live,
+                    f"revert /{skill} ({pattern}) validation-failed",
+                    surface=surface,
+                )
+            except (OSError, RuntimeError) as exc:
+                record.update(
+                    {
+                        "status": "validation-failed-audit-failed",
+                        "rollback_audit_error": str(exc)[:500],
+                    }
+                )
+                return record, (
+                    f"REVERTED /{skill} [{surface}] — validation failed; "
+                    f"rollback snapshot failed: {exc}"
+                )
+            record.update(
+                {
+                    "status": "validation-failed",
+                    "commit_after": rollback_commit,
+                    "rollback_commit": rollback_commit,
+                }
+            )
+            return record, (
+                f"REVERTED /{skill} [{surface}] — validation contract failed: "
+                f"{validation_note[:200]}"
+            )
+    except (OSError, TimeoutError) as exc:
+        return None, f"deferred /{skill} — skill mutation unavailable: {exc}"
+
+
+def propose_new(
+    ledger: dict[str, Any],
+    entries: list[Any],
+    today: str,
+    changes: list[str],
+    use_llm: bool,
+    dry_run: bool,
+) -> list[str]:
     candidates: list[str] = []
     # Skills that appear in attributed ratings, ranked by low-rated volume.
     # general-session is the dump-bin fallback — never grow it past MAX bullets.
-    skills = Counter(e.skill for e in entries if e.skill and e.rating <= LOW)
+    skills = Counter(
+        skill.lower()
+        for entry in entries
+        if isinstance((skill := getattr(entry, "skill", None)), str)
+        and _valid_skill_name(skill)
+        and isinstance((rating := getattr(entry, "rating", None)), (int, float))
+        and not isinstance(rating, bool)
+        and math.isfinite(float(rating))
+        and float(rating) <= LOW
+    )
     for skill, _ in skills.most_common():
         if active_edit_for(ledger, skill):
             continue                                   # one active edit per skill
@@ -515,38 +803,19 @@ def propose_new(ledger: dict, entries: list, today: str, changes: list[str],
         if not block:
             changes.append(f"deferred /{skill} — LLM unavailable; retry next session")
             continue
-        validation_cmd = parse_validation_contract(block)
-        expected_outcome = f"fix '{pattern}' on /{skill} (baseline fail rate {rate:.2f}, n={low_n})"
-        commit_before = snapshot(skill, live, f"before autofix /{skill} ({pattern})", surface=surface)
-        new_content = upsert_section(live.read_text(), block)
-        if validate_skill_content(new_content):
-            atomic_write_text(live, new_content)
-            commit_after = snapshot(skill, live, f"autofix /{skill} ({pattern})", surface=surface)
-            ok, validation_note = True, ""
-            if validation_cmd:
-                ok, validation_note = run_validation(validation_cmd, live.parent)
-                if not ok:
-                    # Contract not met → revert the edit, keep the record for audit.
-                    prior = content_at(skill, commit_before, surface=surface)
-                    if prior is not None:
-                        atomic_write_text(live, prior)
-                    commit_after = snapshot(skill, live, f"revert /{skill} ({pattern}) validation-failed", surface=surface)
-            ledger["edits"].append({
-                "skill": skill, "pattern": pattern, "surface": surface,
-                "baseline_fail_rate": round(rate, 3), "baseline_n": len(sessions),
-                "expected_outcome": expected_outcome,
-                "validation": f"pass: {validation_note[:200]}" if (validation_cmd and ok) else (
-                    f"fail: {validation_note[:200]}" if (validation_cmd and not ok) else None),
-                "commit_before": commit_before, "commit_after": commit_after,
-                "applied": today, "status": "active" if (not validation_cmd or ok) else "validation-failed",
-                "post_n": 0,
-            })
-            if validation_cmd and not ok:
-                changes.append(f"REVERTED /{skill} [{surface}] — validation contract failed: {validation_note[:200]}")
-            else:
-                changes.append(f"APPLIED /{skill} [{surface}] — guardrail for '{pattern}' (baseline {rate:.2f}, n={low_n})")
-        else:
-            changes.append(f"deferred /{skill} — generated content failed format validation")
+        record, outcome = _apply_guardrail(
+            skill=skill,
+            pattern=pattern,
+            surface=surface,
+            live=live,
+            block=block,
+            today=today,
+            baseline_rate=rate,
+            baseline_n=len(sessions),
+        )
+        if record is not None:
+            ledger.setdefault("edits", []).append(record)
+        changes.append(outcome)
     return candidates
 
 
@@ -578,73 +847,54 @@ def build_report(ledger: dict, changes: list[str], candidates: list[str], today:
 
 
 def suite_gate_allows_apply() -> tuple[bool, str]:
-    """Hard gate: never apply NEW skill mutations when held-out gates are red.
-
-    Lil'Log / Self-Harness: accept harness edits only if D_in and D_out do not regress.
-    Reverts (evaluate_active) still run — they *reduce* risk. New proposes are blocked.
-
-    Checks:
-      1. held_out_suite.py --gate  (deterministic fixtures; always run)
-      2. agent_rollouts last result (if present): block when pass_rate < 0.75
-         or baseline gate_pass is false. Missing/stale file does not block (boot).
-    """
+    """Fail closed for new mutations while preserving evaluate/revert behavior."""
     suite = Path(__file__).resolve().parent / "held_out_suite.py"
-    if not suite.exists():
-        return True, "held_out_suite.py missing — fail-open for evaluate-only paths"
-    proc = subprocess.run(
-        [sys.executable, str(suite), "--gate"],
-        capture_output=True, text=True,
-    )
+    if not suite.is_file():
+        return False, "held_out_suite.py missing — new mutations blocked"
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(suite), "--gate"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"held_out_suite gate unavailable: {exc}"
     if proc.returncode != 0:
         tail = ((proc.stdout or "") + (proc.stderr or ""))[-400:].strip()
         return False, f"held_out_suite gate FAIL (rc={proc.returncode}): {tail}"
 
-    # Agent rollouts: use last run (produced by session-end / self_harness).
-    # Do not re-invoke LLM here — session-end owns that cost.
+    # Agent rollouts are a supplemental live-provider gate. Missing state is allowed
+    # for bootstrap, but an existing malformed result must never authorize mutation.
     last = STATE_DIR / "agent_rollouts_last.json"
-    if last.exists():
-        try:
-            data = json.loads(last.read_text())
-            summary = data.get("summary") or {}
-            gate = data.get("gate") or {}
-            rate = float(summary.get("pass_rate") or 0.0)
-            skipped = bool(summary.get("skipped_all"))
-            if not skipped:
-                if rate < 0.75:
-                    return False, (
-                        f"agent_rollouts gate FAIL pass_rate={rate:.1%} < 75% "
-                        f"(see {last})"
-                    )
-                if gate.get("has_baseline") and gate.get("gate_pass") is False:
-                    return False, f"agent_rollouts baseline regression (see {last})"
-                return True, (
-                    f"held_out_suite PASS; agent_rollouts PASS "
-                    f"(pass_rate={rate:.1%} n={summary.get('n')})"
-                )
-            return True, "held_out_suite PASS; agent_rollouts skipped (no LLM)"
-        except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
-            # Corrupt last file — do not block applies
-            return True, f"held_out_suite PASS; agent_rollouts last unreadable ({e})"
-
-    return True, "held_out_suite PASS; agent_rollouts no prior run (not blocking)"
+    if not last.exists():
+        return True, "held_out_suite PASS; agent_rollouts no prior run (not blocking)"
+    data, error = try_read_json_object(last)
+    if error:
+        return False, f"agent_rollouts gate state invalid: {error}"
+    summary = data.get("summary")
+    gate = data.get("gate")
+    if not isinstance(summary, dict) or not isinstance(gate, dict):
+        return False, "agent_rollouts gate state invalid: expected summary and gate objects"
+    if summary.get("skipped_all") is True:
+        return True, "held_out_suite PASS; agent_rollouts skipped (no LLM)"
+    rate = _normalized_rate(summary.get("pass_rate"))
+    if rate is None:
+        return False, "agent_rollouts gate state invalid: pass_rate must be in [0,1]"
+    if rate < 0.75:
+        return False, f"agent_rollouts gate FAIL pass_rate={rate:.1%} < 75% (see {last})"
+    if gate.get("has_baseline") is True and gate.get("gate_pass") is not True:
+        return False, f"agent_rollouts baseline regression or invalid gate result (see {last})"
+    return True, (
+        f"held_out_suite PASS; agent_rollouts PASS "
+        f"(pass_rate={rate:.1%} n={summary.get('n')})"
+    )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────────────
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Skill auto-fix (L2 gated auto-apply)")
-    ap.add_argument("--apply", action="store_true", help="evaluate + apply (writes files/ledger)")
-    ap.add_argument("--dry-run", action="store_true", help="report only, touch nothing")
-    ap.add_argument("--no-llm", action="store_true", help="deterministic only: revert + flag, no new edits")
-    ap.add_argument("--status", action="store_true", help="print the ledger and exit")
-    ap.add_argument("--force", action="store_true",
-                    help="bypass held_out_suite gate for NEW applies (danger; reverts still run)")
-    args = ap.parse_args()
-
+def _run_cycle(args: argparse.Namespace) -> int:
     ledger = load_ledger()
-    if args.status:
-        print(json.dumps(ledger, indent=2))
-        return 0
-
     entries = load_all_ratings(RATINGS_FILE)
     today = datetime.now().strftime("%Y-%m-%d")
     dry = args.dry_run or not args.apply
@@ -654,10 +904,9 @@ def main() -> int:
         ensure_repo()
 
     changes: list[str] = []
-    # Always evaluate/revert first — reverts are safe even when suite is red.
+    # Always evaluate/revert first — reverts reduce risk even when new applies are blocked.
     evaluate_active(ledger, entries, today, changes, dry)
 
-    # Hard-block NEW applies when fixture suite gate fails (unless --force).
     allow_new, gate_msg = (True, "dry-run/no-apply") if dry else (
         (True, "forced") if args.force else suite_gate_allows_apply()
     )
@@ -665,9 +914,9 @@ def main() -> int:
         changes.append(f"BLOCKED new skill applies — {gate_msg}")
         print(f"[skill_autofix] {gate_msg}")
         print("[skill_autofix] NEW applies blocked; reverts/measure-after still applied above.")
-        candidates: list[str] = []
-        # Still surface who would have qualified (deterministic half)
-        candidates = propose_new(ledger, entries, today, changes, use_llm=False, dry_run=True)
+        candidates = propose_new(
+            ledger, entries, today, changes, use_llm=False, dry_run=True
+        )
     else:
         if not dry:
             print(f"[skill_autofix] {gate_msg}")
@@ -675,20 +924,42 @@ def main() -> int:
 
     report = build_report(ledger, changes, candidates, today)
     print(report)
-
     if dry:
         print("[dry-run] no files or ledger written")
         return 0
 
     if changes:
         ledger.setdefault("log", []).append({"date": today, "changes": changes})
-    save_ledger(ledger)
+    save_ledger(ledger, locked=True)
     atomic_write_text(DIAG_DIR / f"skill_autofix_{today}.md", report)
     print(f"Wrote: {LEDGER_FILE}")
     print(f"Wrote: {DIAG_DIR / f'skill_autofix_{today}.md'}")
-    # Exit 2 = suite blocked applies (caller can distinguish from hard crash)
     return 0 if allow_new else 2
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Skill auto-fix (L2 gated auto-apply)")
+    ap.add_argument("--apply", action="store_true", help="evaluate + apply (writes files/ledger)")
+    ap.add_argument("--dry-run", action="store_true", help="report only, touch nothing")
+    ap.add_argument("--no-llm", action="store_true", help="deterministic only: revert + flag, no new edits")
+    ap.add_argument("--status", action="store_true", help="print the ledger and exit")
+    ap.add_argument("--force", action="store_true",
+                    help="bypass held_out_suite gate for NEW applies (danger; reverts still run)")
+    args = ap.parse_args(argv)
+
+    if args.status:
+        print(json.dumps(load_ledger(), indent=2))
+        return 0
+    dry = args.dry_run or not args.apply
+    try:
+        if dry:
+            return _run_cycle(args)
+        with exclusive_lock(LEDGER_FILE):
+            return _run_cycle(args)
+    except (OSError, RuntimeError, TimeoutError) as exc:
+        print(f"[skill_autofix] mutation cycle failed: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

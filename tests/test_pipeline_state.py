@@ -90,7 +90,8 @@ def test_apply_variant_updates_lesson_and_only_matching_ledger_rows(
     records = load_jsonl_objects(variants).records
     assert records[0]["status"] == "applied"
     assert records[1]["status"] == "proposed"
-    assert (tmp_path / "backups" / "target_2026-09-05.md").exists()
+    backups = list((tmp_path / "backups").glob("target_2026-09-05_*.md"))
+    assert len(backups) == 1
 
 
 def test_apply_variant_fails_without_proposal_lesson_or_frontmatter(
