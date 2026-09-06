@@ -16,12 +16,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
+import errno
+import os
 import re
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from harness_paths import HARNESS_HOME, LESSONS_DIR
+from state_io import atomic_write_text, try_read_json_object
 
 MEM = LESSONS_DIR
 STATE = HARNESS_HOME / "MEMORY/STATE"
@@ -36,13 +37,34 @@ PROTECTED = frozenset({
 })
 
 
-def load_scores() -> dict:
-    if not SCORES.exists():
+def load_scores() -> dict[str, dict]:
+    data, _error = try_read_json_object(SCORES)
+    scores = data.get("scores")
+    if not isinstance(scores, dict):
         return {}
+    return {
+        str(pattern): value
+        for pattern, value in scores.items()
+        if isinstance(value, dict)
+    }
+
+
+def safe_int(value: object) -> int:
+    if not isinstance(value, (str, int, float)):
+        return 0
     try:
-        return json.loads(SCORES.read_text()).get("scores") or {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+        return int(value or 0)
+    except (OverflowError, ValueError):
+        return 0
+
+
+def archive_path(pattern: str, today: str) -> Path:
+    candidate = ARCHIVE / f"{pattern}_{today}.md"
+    counter = 1
+    while candidate.exists():
+        candidate = ARCHIVE / f"{pattern}_{today}.{counter}.md"
+        counter += 1
+    return candidate
 
 
 def parse_meta(path: Path) -> dict:
@@ -72,19 +94,32 @@ def backfill_baseline(meta: dict) -> bool:
         count=1,
     )
     if txt2 != txt:
-        meta["path"].write_text(txt2)
+        atomic_write_text(meta["path"], txt2)
         return True
     return False
 
 
-def main() -> int:
+def archive_lesson(source: Path, destination: Path) -> None:
+    try:
+        os.replace(source, destination)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        atomic_write_text(destination, source.read_text(errors="replace"))
+        source.unlink()
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--backfill-baseline-only", action="store_true")
     ap.add_argument("--retire-days", type=int, default=14)
     ap.add_argument("--max-occ", type=int, default=3,
                     help="max occurrence_count to consider a zombie")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if args.retire_days < 0 or args.max_occ < 0:
+        print("[lesson_retire] retire-days and max-occ must be non-negative")
+        return 2
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     scores = load_scores()
     files = sorted(MEM.glob("lesson_autogen_*.md")) if MEM.exists() else []
@@ -104,8 +139,8 @@ def main() -> int:
             continue
         sc = scores.get(m["pattern"]) or {}
         v = sc.get("verdict") or "pending"
-        after_n = int(sc.get("after_n") or 0)
-        days_open = int(sc.get("days_open") or 0)
+        after_n = safe_int(sc.get("after_n"))
+        days_open = safe_int(sc.get("days_open"))
         if v not in ("pending", "stale-pending", "no-baseline", "undated"):
             continue
         # zombie: stuck pending with little post traffic for long enough
@@ -119,8 +154,8 @@ def main() -> int:
     for r in retire[:40]:
         print(f"  • {r['pattern']}: {r['reason']}")
 
-    DIAG.mkdir(parents=True, exist_ok=True)
-    (DIAG / f"lesson_retire_{today}.md").write_text(
+    atomic_write_text(
+        DIAG / f"lesson_retire_{today}.md",
         "# Lesson retire — " + today + "\n\n"
         + "\n".join(f"- {r['pattern']}: {r['reason']}" for r in retire) + "\n"
     )
@@ -131,12 +166,12 @@ def main() -> int:
 
     ARCHIVE.mkdir(parents=True, exist_ok=True)
     for r in retire:
-        dest = ARCHIVE / f"{r['pattern']}_{today}.md"
-        shutil.move(str(r["path"]), str(dest))
+        dest = archive_path(r["pattern"], today)
+        archive_lesson(r["path"], dest)
         print(f"  archived {r['pattern']} → {dest}")
     print(f"[lesson_retire] archived {len(retire)} lessons")
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

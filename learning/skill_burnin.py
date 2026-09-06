@@ -12,7 +12,9 @@ Honest note: provisional measure uses historical sessions that may predate the
 guardrail. Real post_n still increments on SessionEnd via skill_autofix.evaluate_active.
 """
 from __future__ import annotations
-import argparse, json
+
+import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 import sys
@@ -23,8 +25,33 @@ from skill_autofix import (
 )
 from measure_effectiveness import verdict_for
 from self_improve import load_all_ratings, RATINGS_FILE
+from state_io import atomic_write_text
 
 STALL_DAYS = 14  # active edit older than this with zero post-apply traffic → park
+
+
+def valid_edits(ledger: dict) -> list[dict]:
+    edits = ledger.get("edits")
+    if not isinstance(edits, list):
+        return []
+    return [
+        edit
+        for edit in edits
+        if isinstance(edit, dict)
+        and isinstance(edit.get("skill"), str)
+        and edit["skill"]
+        and isinstance(edit.get("pattern"), str)
+        and edit["pattern"]
+    ]
+
+
+def safe_rate(value: object) -> float:
+    if not isinstance(value, (str, int, float)):
+        return 0.0
+    try:
+        return float(value)
+    except ValueError:
+        return 0.0
 
 
 def resolve_stall(ledger: dict, entries: list, today: str, apply: bool) -> list[str]:
@@ -36,9 +63,14 @@ def resolve_stall(ledger: dict, entries: list, today: str, apply: bool) -> list[
     """
     from datetime import date
     changes: list[str] = []
-    today_d = date.fromisoformat(today)
-    for ed in ledger.get("edits", []):
+    try:
+        today_d = date.fromisoformat(today)
+    except ValueError:
+        return []
+    for ed in valid_edits(ledger):
         st = ed.get("status")
+        if st not in {"active", "stalled"}:
+            continue
         post = skill_sessions(entries, ed["skill"], since=ed.get("applied"))
         if st == "active":
             try:
@@ -71,14 +103,14 @@ def resolve_stall(ledger: dict, entries: list, today: str, apply: bool) -> list[
     return changes
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--provisional-measure", action="store_true")
     ap.add_argument("--resolve-stall", action="store_true")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--json", action="store_true")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     ledger = load_ledger()
     entries = load_all_ratings(RATINGS_FILE)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -89,17 +121,18 @@ def main() -> int:
         if changes and not args.apply:
             print("[dry] re-run with --apply to write stall/reactivate transitions")
         return 0
-    active = [e for e in ledger.get("edits", []) if e.get("status") == "active"]
+    active = [edit for edit in valid_edits(ledger) if edit.get("status") == "active"]
     rows = []
     for ed in active:
         post = skill_sessions(entries, ed["skill"], since=ed.get("applied"))
         all_s = skill_sessions(entries, ed["skill"])
         post_rate, _ = fail_rate(post)
         all_rate, all_low = fail_rate(all_s)
-        prov_v = verdict_for(ed["baseline_fail_rate"], all_rate, max(len(all_s), MIN_AFTER), MIN_AFTER)
+        baseline_rate = safe_rate(ed.get("baseline_fail_rate"))
+        prov_v = verdict_for(baseline_rate, all_rate, max(len(all_s), MIN_AFTER), MIN_AFTER)
         rows.append({
             "skill": ed["skill"], "pattern": ed["pattern"],
-            "baseline_fail_rate": ed.get("baseline_fail_rate"),
+            "baseline_fail_rate": baseline_rate,
             "post_n": len(post), "post_fail_rate": round(post_rate, 3) if post else None,
             "all_n": len(all_s), "all_fail_rate": round(all_rate, 3),
             "provisional_verdict": prov_v,
@@ -125,29 +158,30 @@ def main() -> int:
                 changes.append(f"skip /{ed['skill']} — only {len(all_s)} total sessions")
                 continue
             rate, _ = fail_rate(all_s)
-            v = verdict_for(ed["baseline_fail_rate"], rate, len(all_s), MIN_AFTER)
+            baseline_rate = safe_rate(ed.get("baseline_fail_rate"))
+            v = verdict_for(baseline_rate, rate, len(all_s), MIN_AFTER)
             ed["provisional_fail_rate"] = round(rate, 3)
             ed["provisional_verdict"] = v
             ed["provisional_measured"] = today
             ed["provisional_n"] = len(all_s)
             # Only auto-confirm on strong improvement; never provisional-revert
             # (historical data can understate post-guardrail gains).
-            if v in ("working", "improving", "resolved") and rate < float(ed["baseline_fail_rate"]) - 0.005:
+            if v in ("working", "improving", "resolved") and rate < baseline_rate - 0.005:
                 ed["status"] = "confirmed"
                 ed["confirmed"] = today
                 ed["confirm_mode"] = "provisional_all_sessions"
                 changes.append(
                     f"PROVISIONAL-CONFIRM /{ed['skill']} — {v} "
-                    f"(all_rate={rate:.2f} < base={ed['baseline_fail_rate']:.2f}, n={len(all_s)})"
+                    f"(all_rate={rate:.2f} < base={baseline_rate:.2f}, n={len(all_s)})"
                 )
             else:
                 changes.append(
                     f"HOLD /{ed['skill']} — provisional {v} "
-                    f"(all_rate={rate:.2f} base={ed['baseline_fail_rate']:.2f}); need live post sessions"
+                    f"(all_rate={rate:.2f} base={baseline_rate:.2f}); need live post sessions"
                 )
         save_ledger(ledger)
-        DIAG_DIR.mkdir(parents=True, exist_ok=True)
-        (DIAG_DIR / f"skill_burnin_{today}.md").write_text(
+        atomic_write_text(
+            DIAG_DIR / f"skill_burnin_{today}.md",
             f"# Skill burn-in {today}\n\n" + "\n".join(f"- {c}" for c in changes) + "\n"
         )
         print("\n".join(changes) or "no changes")
@@ -158,5 +192,5 @@ def main() -> int:
             print(f"  would evaluate /{r['skill']} → {r['provisional_verdict']}")
     return 0
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())

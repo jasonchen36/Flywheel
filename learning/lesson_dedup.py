@@ -40,12 +40,12 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 from datetime import datetime, timezone
 from itertools import combinations
 from pathlib import Path
 from harness_paths import HARNESS_HOME
-from review_store import enqueue_pending, load_reviews
+from review_store import enqueue_pending
+from state_io import atomic_write_text
 
 MEMORY_DIR = HARNESS_HOME / "MEMORY/lessons"
 DIAGNOSTICS = HARNESS_HOME / "MEMORY/LEARNING/DIAGNOSTICS"
@@ -75,7 +75,6 @@ def is_template_rule(rule: str) -> bool:
 
 def parse_lesson(path: Path) -> dict:
     txt = path.read_text()
-    m_pattern = re.search(r"^\s*pattern:\s*(\S+)", txt, re.M)
     m_count = re.search(r"^\s*occurrence_count:\s*(\d+)", txt, re.M)
     m_avg = re.search(r"^\s*avg_rating:\s*([\d.]+)", txt, re.M)
     parts = txt.split("---", 2)
@@ -83,7 +82,7 @@ def parse_lesson(path: Path) -> dict:
     rule = body.split("\n\n", 1)[0].strip()
     return {
         "path": path,
-        "pattern": m_pattern.group(1) if m_pattern else path.stem.replace("lesson_autogen_", ""),
+        "pattern": path.stem.removeprefix("lesson_autogen_"),
         "occurrence_count": int(m_count.group(1)) if m_count else 0,
         "avg_rating": float(m_avg.group(1)) if m_avg else 0.0,
         "rule": rule,
@@ -99,10 +98,6 @@ def jaccard(a: set[str], b: set[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
-
-
-def load_review_queue() -> list[dict]:
-    return load_reviews(REVIEW_FILE)
 
 
 def find_merge_candidates(lessons: list[dict], threshold: float) -> list[dict]:
@@ -134,11 +129,14 @@ def find_merge_candidates(lessons: list[dict], threshold: float) -> list[dict]:
     return sorted(candidates, key=lambda c: -c["score"])
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="queue merge candidates for human review")
     ap.add_argument("--threshold", type=float, default=MERGE_THRESHOLD)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if not 0.0 <= args.threshold <= 1.0:
+        print("[lesson_dedup] threshold must be between 0 and 1")
+        return 2
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     files = sorted(MEMORY_DIR.glob("lesson_autogen_*.md"))
@@ -161,24 +159,16 @@ def main() -> int:
     report = "\n".join(lines) + "\n"
     print(report)
 
-    DIAGNOSTICS.mkdir(parents=True, exist_ok=True)
-    (DIAGNOSTICS / f"lesson_dedup_{today}.md").write_text(report)
+    atomic_write_text(DIAGNOSTICS / f"lesson_dedup_{today}.md", report)
 
     if not args.apply or not candidates:
         if not args.apply and candidates:
             print("[lesson_dedup] Re-run with --apply to queue candidates for human review.")
         return 0
 
-    review_records = load_review_queue()
-    already_queued = {(r.get("note", "").split("survivor=")[-1].split(",")[0]
-                       if "survivor=" in r.get("note", "") else None)
-                      for r in review_records
-                      if r.get("status") == "pending" and r.get("source") == "lesson_dedup"}
     pending_rows: list[dict] = []
     for c in candidates:
         key = f"{c['survivor']}<-{c['loser']}"
-        if key in already_queued:
-            continue
         pending_rows.append({
             "pattern": key, "detected_at": today, "delta": None,
             "after_n": c["survivor_n"] + c["loser_n"],
@@ -197,10 +187,29 @@ def main() -> int:
     return 0
 
 
+def valid_pattern(pattern: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", pattern))
+
+
+def backup_path(pattern: str, today: str) -> Path:
+    candidate = BACKUP_DIR / f"{pattern}_{today}.md"
+    counter = 1
+    while candidate.exists():
+        candidate = BACKUP_DIR / f"{pattern}_{today}.{counter}.md"
+        counter += 1
+    return candidate
+
+
 def merge_lessons(survivor_pattern: str, loser_pattern: str, today: str) -> bool:
     """Approving a lesson_dedup record: fold loser's evidence bullets into survivor's
     frontmatter/evidence, backup + delete the loser file. Called by review_queue.py.
     Never touches hand-written feedback_*.md files (glob is lesson_autogen_ only)."""
+    if not valid_pattern(survivor_pattern) or not valid_pattern(loser_pattern):
+        print("WARNING: invalid lesson pattern identifier. No merge performed.")
+        return False
+    if survivor_pattern == loser_pattern:
+        print("WARNING: survivor and loser must differ. No merge performed.")
+        return False
     survivor_path = MEMORY_DIR / f"lesson_autogen_{survivor_pattern}.md"
     loser_path = MEMORY_DIR / f"lesson_autogen_{loser_pattern}.md"
     if not survivor_path.exists() or not loser_path.exists():
@@ -209,11 +218,15 @@ def merge_lessons(survivor_pattern: str, loser_pattern: str, today: str) -> bool
         return False
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    backup_path = BACKUP_DIR / f"{loser_pattern}_{today}.md"
-    shutil.copy2(loser_path, backup_path)
-
+    backup = backup_path(loser_pattern, today)
     survivor_txt = survivor_path.read_text()
     loser = parse_lesson(loser_path)
+    atomic_write_text(backup, loser["full_text"])
+    marker = f"**Merged from lesson_autogen_{loser_pattern}.md ("
+    if marker in survivor_txt:
+        loser_path.unlink()
+        print(f"Completed prior merge of lesson_autogen_{loser_pattern}.md; loser deleted.")
+        return True
     m_count = re.search(r"^(\s*occurrence_count:\s*)(\d+)", survivor_txt, re.M)
     if m_count:
         new_count = int(m_count.group(2)) + loser["occurrence_count"]
@@ -221,14 +234,14 @@ def merge_lessons(survivor_pattern: str, loser_pattern: str, today: str) -> bool
 
     merge_note = (f"\n\n**Merged from lesson_autogen_{loser_pattern}.md ({today}, "
                  f"{loser['occurrence_count']} occurrences, backed up to "
-                 f"{backup_path}):**\n{loser['rule']}\n")
+                 f"{backup}):**\n{loser['rule']}\n")
     survivor_txt = survivor_txt.rstrip("\n") + merge_note + "\n"
-    survivor_path.write_text(survivor_txt)
+    atomic_write_text(survivor_path, survivor_txt)
     loser_path.unlink()
     print(f"Merged lesson_autogen_{loser_pattern}.md into lesson_autogen_{survivor_pattern}.md "
-          f"(backup: {backup_path}). Loser file deleted.")
+          f"(backup: {backup}). Loser file deleted.")
     return True
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - exercised by install smoke tests
     raise SystemExit(main())
