@@ -267,12 +267,55 @@ def test_lock_owner_and_pid_helpers_cover_invalid_and_permission_paths(
 
     monkeypatch.setattr(state_io.os, "kill", denied)
     assert state_io._pid_alive(123) is True
-    assert state_io._lock_is_stale(tmp_path / "missing-lock", 10) is True
+    assert state_io._lock_is_stale(tmp_path / "missing-lock", 10) is False
 
     file_lock = tmp_path / "file.lock"
     file_lock.write_text("legacy")
     state_io._remove_lock(file_lock)
     assert not file_lock.exists()
+
+
+def test_stale_recovery_is_serialized_and_recovers_abandoned_guard(
+    tmp_path: Path,
+):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    recovery_path = state_io._recovery_path(lock_path)
+    lock_path.mkdir()
+    atomic_write_json(lock_path / "owner.json", {"pid": 99999999, "token": "dead"})
+    recovery_path.mkdir()
+
+    assert state_io._try_recover_stale_lock(lock_path, 300) is False
+    assert lock_path.exists()
+    state_io.os.utime(recovery_path, (0, 0))
+    assert state_io._try_recover_stale_lock(lock_path, 0) is False
+    assert not recovery_path.exists()
+    assert state_io._try_recover_stale_lock(lock_path, 300) is True
+    assert not lock_path.exists()
+    assert not recovery_path.exists()
+
+
+def test_stale_recovery_leaves_live_owner_and_cleanup_races_are_nonfatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    target = tmp_path / "state.json"
+    lock_path = lock_path_for(target)
+    lock_path.mkdir()
+    atomic_write_json(
+        lock_path / "owner.json",
+        {"pid": state_io.os.getpid(), "token": "live"},
+    )
+    assert state_io._try_recover_stale_lock(lock_path, 0) is False
+    assert lock_path.exists()
+    assert not state_io._recovery_path(lock_path).exists()
+
+    monkeypatch.setattr(
+        state_io.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("raced")),
+    )
+    state_io._remove_lock(lock_path)
+    assert lock_path.exists()
 
 
 def test_exclusive_lock_waits_for_then_acquires_released_lock(

@@ -106,3 +106,30 @@ def test_installer_places_shared_runtime_for_hooks_and_pi(
     assert (
         tmp_path / "missing-parent" / "runtime" / "state-io.ts"
     ).is_file()
+
+
+def test_parallel_bun_appenders_serialize_dead_owner_recovery(tmp_path: Path):
+    target = tmp_path / "events.jsonl"
+    lock_path = lock_path_for(target)
+    lock_path.mkdir()
+    (lock_path / "owner.json").write_text(
+        json.dumps({"pid": 99999999, "token": "dead", "created_at": 0}) + "\n"
+    )
+    processes = [
+        subprocess.Popen(
+            ["bun", str(WORKER), "append", str(target), f"value-{index}"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for index in range(8)
+    ]
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=10)
+        assert process.returncode == 0, f"{stdout}\n{stderr}"
+
+    values = {record["value"] for record in load_jsonl_objects(target).records}
+    assert values == {f"value-{index}" for index in range(8)}
+    assert not lock_path.exists()
+    assert not Path(f"{lock_path}.recovery.d").exists()

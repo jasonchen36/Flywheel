@@ -126,7 +126,7 @@ python3 held_out_suite.py --gate
 | Grok Build | `[compat.claude] hooks` reading same Claude paths |
 | pi | `pi/*.ts` extensions + SessionEnd via Claude-compatible bridge |
 
-Tag ratings with `agent: claude|grok|pi` (hooks set this when possible). Claude and pi append ratings, pending judge work, and enforcement events through the same ownership-directory lock protocol used by Python rewriters, preventing cross-runtime lost updates. Dead owners recover automatically; long-running live owners are never evicted solely because of lock age.
+Tag ratings with `agent: claude|grok|pi` (hooks set this when possible). Claude and pi append ratings, pending judge work, and enforcement events through the same ownership-directory lock protocol used by Python rewriters, preventing cross-runtime lost updates. Dead-owner recovery is serialized across contenders, disappearing paths are never misclassified as stale, and long-running live owners are never evicted solely because of lock age.
 
 ---
 
