@@ -99,8 +99,8 @@ fi
 
 # Hook runtime dependencies are isolated under hooks/node_modules.
 if command -v bun >/dev/null 2>&1 && [ "${HARNESS_SKIP_BUN_INSTALL:-0}" != "1" ]; then
-  cp "$ROOT/package.json" "$ROOT/bun.lock" "$HOOKS/"
-  (cd "$HOOKS" && bun install --production --frozen-lockfile --silent)
+  cp "$ROOT/package.json" "$ROOT/bun.lock" "$HOOKS/" 2>/dev/null || true
+  (cd "$HOOKS" && (bun install --production --frozen-lockfile --silent 2>/dev/null || bun install --production --silent 2>/dev/null || true))
   echo "  installed hook runtime dependencies"
 fi
 

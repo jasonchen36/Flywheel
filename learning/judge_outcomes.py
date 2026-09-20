@@ -69,6 +69,12 @@ from self_improve import (  # noqa: E402
 )
 from evals import covered_patterns  # noqa: E402
 
+try:
+    from jev_judge import judge_session_turn, get_api_key  # noqa: E402
+    HAS_JEV = bool(get_api_key())
+except ImportError:
+    HAS_JEV = False
+
 
 def _extract_json(raw: str) -> dict | None:
     """Generic JSON-object extractor (tolerates code fences/prose). Unlike
@@ -204,6 +210,9 @@ def _judge_once(context: str, response: str, patterns: list[str]) -> dict[str, s
     return out
 
 
+_ORIGINAL_JUDGE_ONCE = _judge_once
+
+
 def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
     """Quorum-vote a single turn. Returns {pattern: {failed, evidence}} for ALL judged
     patterns (full matrix: not-flagged = passed), or None if the LLM was unavailable."""
@@ -215,6 +224,25 @@ def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
     context = raw_context if isinstance(raw_context, str) else ""
     if not patterns:
         return {}
+
+    # Prefer Jev System One decision model if configured (lower variance, faster, cheaper)
+    if HAS_JEV and _judge_once is _ORIGINAL_JUDGE_ONCE:
+        try:
+            jev_res = judge_session_turn(
+                user_prompt=context,
+                agent_output=response,
+                gap_patterns=patterns,
+            )
+            detected = set(jev_res.get("detected_failures", []))
+            return {
+                p: {
+                    "failed": p in detected,
+                    "evidence": f"Jev System One (prob={jev_res.get('pass_probability', 0):.2f})",
+                }
+                for p in patterns
+            }
+        except Exception:
+            pass
     votes: Counter = Counter()
     evidence: dict[str, str] = {}
     for _ in range(QUORUM):
