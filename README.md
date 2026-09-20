@@ -20,6 +20,7 @@ This is the **employer-agnostic core**: ratings → lessons → effectiveness �
 | **Precondition Enumeration** | Enforces explicit precondition enumeration before action execution (2.83x gain over generic CoT) |
 | **Deterministic Controls** | Wraps mutating operations in hard code checks and tool wrappers rather than prose system prompts |
 | **Independent Observer Verification** | Stop hooks and verification loops use independent, specialized tools (linters, AST checks, schema dry-runs) |
+| **Jev-as-a-Judge (System One)** | Fast, typed semantic decision evaluator (`learning/jev_judge.py`) using TypeSafe Jev (`Noul`, `Choice`, `Score`) with 913x lower variance, 0.44s latency, and $0.00035/call |
 | **$pass^k$ Reliability Benchmark** | Evaluates multi-step agent success across all $k$ attempts ($pass^k$) rather than $pass@k$ |
 | **RatingCapture** | Explicit 1–10 + optional implicit sentiment → `ratings.jsonl` |
 | **Human Policy Ratification** | `review_queue.py` gates candidate rules so a human approves input policy once before hard enforcement |
