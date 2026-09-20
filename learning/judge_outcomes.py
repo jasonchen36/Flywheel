@@ -210,6 +210,9 @@ def _judge_once(context: str, response: str, patterns: list[str]) -> dict[str, s
     return out
 
 
+_ORIGINAL_JUDGE_ONCE = _judge_once
+
+
 def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
     """Quorum-vote a single turn. Returns {pattern: {failed, evidence}} for ALL judged
     patterns (full matrix: not-flagged = passed), or None if the LLM was unavailable."""
@@ -223,7 +226,7 @@ def judge_turn(turn: dict, patterns: list[str]) -> dict | None:
         return {}
 
     # Prefer Jev System One decision model if configured (lower variance, faster, cheaper)
-    if HAS_JEV:
+    if HAS_JEV and _judge_once is _ORIGINAL_JUDGE_ONCE:
         try:
             jev_res = judge_session_turn(
                 user_prompt=context,

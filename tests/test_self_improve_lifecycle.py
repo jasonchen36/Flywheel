@@ -64,6 +64,9 @@ def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Pat
     monkeypatch.setattr(self_improve, "EVAL_CANDIDATES_FILE", paths["candidates"])
     monkeypatch.setattr(self_improve, "_HIST_EPOCH_CACHE", None)
     monkeypatch.setattr(self_improve, "_RECLASS_CACHE", None)
+    monkeypatch.delenv("GROK_AGENT", raising=False)
+    monkeypatch.delenv("PAI_CLAUDE_HEADLESS_DISABLED", raising=False)
+    monkeypatch.delenv("PAI_HAIKU_BACKGROUND_DISABLED", raising=False)
     return paths
 
 

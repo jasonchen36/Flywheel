@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import io
 import json
 import sys
@@ -261,7 +262,8 @@ def test_transactional_write_and_main_modes(
     assert rows[0]["turn_key"].startswith("session-a|")
     registry = json.loads(paths["registry"].read_text())
     assert registry["evals"]["proof_check"]["status"] == "active"
-    assert (paths["diagnostics"] / "evals_2026-09-06.md").exists()
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert (paths["diagnostics"] / f"evals_{today}.md").exists()
     assert not lock_path_for(paths["results"]).exists()
     assert not lock_path_for(paths["registry"]).exists()
 
